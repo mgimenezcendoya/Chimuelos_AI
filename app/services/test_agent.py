@@ -65,23 +65,40 @@ class TestAIAgent:
 
     async def get_menu_items(self) -> List[Dict[str, Any]]:
         """Obtiene los productos del menú desde la base de datos"""
-        async with self.db_pool.acquire() as conn:
-            query = """
-                SELECT nombre, descripcion, precio_base, es_combo, 
-                       categoria, numero_de_piezas
-                FROM hatsu.productos
-                WHERE activo = true
-                ORDER BY categoria, nombre
-            """
-            rows = await conn.fetch(query)
-            new_menu = [dict(row) for row in rows]
-            
-            # Si el menú cambió, invalidar el caché
-            if self._last_menu != new_menu:
-                self._last_menu = new_menu
-                self.invalidate_prompt_cache()
-            
-            return new_menu
+        try:
+            if not self.db_pool:
+                logger.error("No hay conexión a la base de datos")
+                return []
+
+            async with self.db_pool.acquire() as conn:
+                query = """
+                    SELECT 
+                        nombre, 
+                        descripcion, 
+                        precio_base, 
+                        es_combo, 
+                        categoria, 
+                        numero_de_piezas
+                    FROM hatsu.productos
+                    WHERE activo = true
+                    ORDER BY categoria, nombre
+                """
+                logger.info("Ejecutando consulta para obtener menú de la base de datos")
+                rows = await conn.fetch(query)
+                logger.info(f"Productos obtenidos de la base de datos: {len(rows)}")
+                
+                new_menu = [dict(row) for row in rows]
+                
+                # Si el menú cambió, invalidar el caché
+                if self._last_menu != new_menu:
+                    logger.info("Menú actualizado - invalidando caché")
+                    self._last_menu = new_menu
+                    self.invalidate_prompt_cache()
+                
+                return new_menu
+        except Exception as e:
+            logger.error(f"Error al obtener menú de la base de datos: {str(e)}")
+            return []
 
     async def get_active_locations(self) -> List[Dict[str, Any]]:
         """Obtiene los locales activos desde la base de datos"""
@@ -142,7 +159,10 @@ class TestAIAgent:
         try:
             menu_items = await self.get_menu_items()
             if not menu_items:
-                return "Error: Menú no disponible"
+                logger.error("No se pudo obtener el menú de la base de datos")
+                return "Lo siento, el menú no está disponible en este momento. Por favor, intenta más tarde."
+
+            logger.info(f"Menú obtenido de la base de datos: {json.dumps(menu_items, indent=2)}")
 
             # Agrupar items por categoría
             categories = {}
@@ -153,22 +173,25 @@ class TestAIAgent:
                 categories[cat].append(item)
 
             # Formatear el menú
-            menu_text = []
-            for category, items in categories.items():
-                menu_text.append(f"\n{category}")
-                for item in items:
+            menu_text = ["# MENÚ HATSU SUSHI"]
+            for category, items in sorted(categories.items()):
+                menu_text.append(f"\n## {category.upper()}")
+                for item in sorted(items, key=lambda x: x['nombre']):
                     item_line = [f"- {item['nombre']}"]
                     if item['precio_base']:
-                        item_line.append(f" (${int(item['precio_base'])})")
+                        item_line.append(f" (${item['precio_base']:,.2f})")
                     if item['descripcion']:
                         item_line.append(f": {item['descripcion']}")
                     if item['numero_de_piezas']:
                         item_line.append(f" ({item['numero_de_piezas']} piezas)")
                     menu_text.append("".join(item_line))
 
-            return "\n".join(menu_text)
+            formatted_menu = "\n".join(menu_text)
+            logger.info("Menú formateado exitosamente")
+            return formatted_menu
         except Exception as e:
-            return f"Error al obtener el menú: {str(e)}"
+            logger.error(f"Error al formatear el menú: {str(e)}")
+            return "Lo siento, hubo un error al obtener el menú. Por favor, intenta más tarde."
 
     async def _format_locales_for_prompt(self) -> str:
         """Formatea la información de locales para el prompt del sistema"""
@@ -275,6 +298,9 @@ class TestAIAgent:
         # Determinar si el usuario tiene dirección registrada
         has_registered_address = "true" if self.user_address else "false"
         registered_address = self.user_address if self.user_address else "ninguna"
+
+        # Obtener el menú actualizado de la base de datos
+        menu_str = await self._format_menu_for_prompt() if include_menu else "Menú no solicitado"
         
         return f"""Eres un asistente virtual de Hatsu Sushi - Vicente Lopez.
         Tu objetivo es ayudar a los clientes a realizar pedidos y responder sus consultas.
@@ -285,6 +311,9 @@ class TestAIAgent:
         
         Información de Locales:
         {locales_str}
+
+        Menú actual (IMPORTANTE: USAR SOLO ESTOS PRODUCTOS Y PRECIOS):
+        {menu_str}
 
         Reglas:
         1. Sé amable y profesional
