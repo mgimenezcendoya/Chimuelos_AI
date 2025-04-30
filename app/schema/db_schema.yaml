@@ -1,0 +1,75 @@
+hatsu.usuarios:
+  description: Información de los usuarios registrados.
+  columns:
+    id: uuid
+    nombre: text
+    telefono: text
+    email: text
+    direccion: text
+    fecha_registro: timestamp
+    local_id: uuid
+    origen: text
+
+hatsu.locales:
+  description: Locales físicos o puntos de venta.
+  columns:
+    id: uuid
+    nombre: text
+    direccion: text
+    telefono: text
+    activo: boolean
+
+hatsu.productos:
+  description: Productos disponibles en el menú.
+  columns:
+    id: uuid
+    nombre: text
+    descripcion: text
+    precio_base: numeric
+    es_combo: boolean
+    activo: boolean
+    categoria: text
+    numero_de_piezas: int
+    url_imagen: text
+
+hatsu.ordenes:
+  description: Pedidos realizados por los usuarios.
+  columns:
+    id: uuid
+    usuario_id: uuid
+    local_id: uuid
+    fecha_hora: timestamp
+    estado: text
+    monto_total: numeric
+    medio_pago: text
+    is_takeaway: boolean
+    fecha_procesada: timestamp
+    fecha_entregada: timestamp
+    origen: text
+    observaciones: text
+
+hatsu.orden_detalle:
+  description: Detalle de productos asociados a cada pedido.
+  columns:
+    id: uuid
+    orden_id: uuid
+    producto_id: uuid
+    cantidad: int
+    precio_unitario: numeric
+    subtotal: numeric
+
+hatsu.mensajes:
+  description: Registro de mensajes de usuarios con el sistema.
+  columns:
+    id: uuid
+    usuario_id: uuid
+    orden_id: uuid
+    rol: text
+    mensaje: text
+    timestamp: timestamptz
+    canal: text
+    intervencion_humana: boolean
+    leido: boolean
+    intervencion_humana_historial: boolean
+    media_url: text
+    flag_imagen_validada: boolean
