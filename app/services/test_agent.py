@@ -227,9 +227,7 @@ class TestAIAgent:
             system_prompt = self.prompt_cache[cache_key]
             
             # Preparar los mensajes para Claude
-            messages = [
-                {"role": "system", "content": system_prompt}
-            ]
+            messages = []
             
             # Agregar historial de conversación
             for msg_pair in self.conversation_history[-5:]:  # Mantener solo los últimos 5 pares
@@ -243,6 +241,7 @@ class TestAIAgent:
                 # Generar respuesta
                 response = await self.client.messages.create(
                     model=self.model,
+                    system=system_prompt,  # 👈 nuevo parámetro
                     messages=messages,
                     max_tokens=1000,
                     temperature=0.7
