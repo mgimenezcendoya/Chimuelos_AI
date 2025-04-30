@@ -2,10 +2,21 @@ from typing import AsyncGenerator
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 from app.core.config import settings
+from sqlalchemy.engine.url import URL
+
+# Create database URL
+db_url = URL.create(
+    drivername="postgresql+asyncpg",
+    username=settings.PGUSER,
+    password=settings.PGPASSWORD,
+    host=settings.PGHOST,
+    port=settings.PGPORT,
+    database=settings.PGDATABASE
+)
 
 # Create async engine
 engine = create_async_engine(
-    settings.DATABASE_URL,
+    db_url,
     echo=True if settings.ENVIRONMENT == "development" else False,
     future=True
 )

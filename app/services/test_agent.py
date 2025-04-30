@@ -1,21 +1,28 @@
 import asyncio
 import os
 import json
+import yaml
+import logging
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
-from typing import Dict, Any
+from anthropic import AsyncAnthropic
+from typing import Dict, Any, List
 from pathlib import Path
+import asyncpg
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import text as sql_text
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Cargar variables de entorno
 load_dotenv()
 
 class TestAIAgent:
-    def __init__(self, menu_data=None, locales_data=None):
-        self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    def __init__(self):
+        self.client = AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        self.model = os.getenv("CLAUDE_MODEL", "claude-3-7-sonnet-20250219")
         self.conversation_history = []
-        self.menu_data = menu_data if menu_data else {}
-        self.locales_data = locales_data if locales_data else {}
-        # Atributos para datos del usuario
         self.user_name = None
         self.user_email = None
         self.user_address = None
@@ -23,9 +30,87 @@ class TestAIAgent:
         self.waiting_for_address_confirmation = False
         self.current_order = None
         self.current_order_json = None
+        self.db_pool = None
+        self.db_schema = self._load_db_schema()
+        self.prompt_cache = {}  # Diccionario para cachear las diferentes versiones del prompt
+        self.max_history_pairs = 3  # Mantener los últimos 3 pares de mensajes
+        self._last_menu = None
+        self._last_locations = None
+    
+    def _load_db_schema(self) -> Dict:
+        """Carga el esquema de la base de datos desde el archivo YAML"""
+        schema_path = Path(__file__).parent.parent / 'schema' / 'db_schema.yaml'
+        with open(schema_path, 'r') as f:
+            return yaml.safe_load(f)
+
+    def _format_schema_for_prompt(self) -> str:
+        """Formatea el esquema de la base de datos para el prompt"""
+        schema_text = ["ESQUEMA DE LA BASE DE DATOS:"]
+        for i, (table_name, table_info) in enumerate(self.db_schema.items(), 1):
+            schema_text.append(f"{i}. {table_name}:")
+            if 'description' in table_info:
+                schema_text.append(f"   {table_info['description']}")
+            for col_name, col_type in table_info['columns'].items():
+                schema_text.append(f"   - {col_name}: {col_type}")
+        return "\n".join(schema_text)
+
+    async def init_db(self):
+        """Inicializa la conexión a la base de datos"""
+        self.db_pool = await asyncpg.create_pool(
+            user=os.getenv('DB_USER'),
+            password=os.getenv('DB_PASSWORD'),
+            database=os.getenv('DB_NAME'),
+            host=os.getenv('DB_HOST')
+        )
+
+    async def get_menu_items(self) -> List[Dict[str, Any]]:
+        """Obtiene los productos del menú desde la base de datos"""
+        async with self.db_pool.acquire() as conn:
+            query = """
+                SELECT nombre, descripcion, precio_base, es_combo, 
+                       categoria, numero_de_piezas
+                FROM hatsu.productos
+                WHERE activo = true
+                ORDER BY categoria, nombre
+            """
+            rows = await conn.fetch(query)
+            new_menu = [dict(row) for row in rows]
+            
+            # Si el menú cambió, invalidar el caché
+            if self._last_menu != new_menu:
+                self._last_menu = new_menu
+                self.invalidate_prompt_cache()
+            
+            return new_menu
+
+    async def get_active_locations(self) -> List[Dict[str, Any]]:
+        """Obtiene los locales activos desde la base de datos"""
+        async with self.db_pool.acquire() as conn:
+            query = """
+                SELECT nombre, direccion, telefono
+                FROM hatsu.locales
+                WHERE activo = true
+                ORDER BY nombre
+            """
+            rows = await conn.fetch(query)
+            new_locations = [dict(row) for row in rows]
+            
+            # Si los locales cambiaron, invalidar el caché
+            if self._last_locations != new_locations:
+                self._last_locations = new_locations
+                self.invalidate_prompt_cache()
+            
+            return new_locations
     
     def set_user_data(self, name=None, email=None, address=None):
         """Establece los datos del usuario"""
+        # Guardar datos anteriores para comparar
+        old_data = {
+            'name': self.user_name,
+            'email': self.user_email,
+            'address': self.user_address
+        }
+        
         if name:
             self.user_name = name
         if email:
@@ -34,6 +119,15 @@ class TestAIAgent:
             self.user_address = address
             # Marcar la dirección como confirmada si se establece desde la base de datos
             self.address_confirmed = True
+        
+        # Si algún dato cambió, invalidar el caché
+        new_data = {
+            'name': self.user_name,
+            'email': self.user_email,
+            'address': self.user_address
+        }
+        if old_data != new_data:
+            self.invalidate_prompt_cache()
     
     def get_user_data(self):
         """Obtiene los datos del usuario"""
@@ -43,91 +137,141 @@ class TestAIAgent:
             "address": self.user_address
         }
     
-    def _format_menu_for_prompt(self) -> str:
+    async def _format_menu_for_prompt(self) -> str:
         """Formatea el menú para el prompt del sistema"""
-        if not self.menu_data:
-            return "Error: Menú no disponible"
-        
-        menu_text = []
-        
-        for section_key, section in self.menu_data.items():
-            menu_text.append(f"\n{section['title']}")
-            if 'description' in section:
-                menu_text.append(f"({section['description']})")
-            
-            for item in section['items']:
-                item_line = []
-                item_line.append(f"- {item['name']}")
-                
-                if 'price' in item:
-                    item_line.append(f"(${int(float(item['price']))})")
-                
-                if 'description' in item:
-                    item_line.append(f": {item['description']}")
-                
-                if 'includes' in item:
-                    item_line.append("\n  * " + "\n  * ".join(item['includes']))
-                
-                if 'availability' in item:
-                    item_line.append(f" ({item['availability']})")
-                
-                menu_text.append("".join(item_line))
-        
-        return "\n".join(menu_text)
-    
-    def _format_locales_for_prompt(self) -> str:
+        try:
+            menu_items = await self.get_menu_items()
+            if not menu_items:
+                return "Error: Menú no disponible"
+
+            # Agrupar items por categoría
+            categories = {}
+            for item in menu_items:
+                cat = item['categoria']
+                if cat not in categories:
+                    categories[cat] = []
+                categories[cat].append(item)
+
+            # Formatear el menú
+            menu_text = []
+            for category, items in categories.items():
+                menu_text.append(f"\n{category}")
+                for item in items:
+                    item_line = [f"- {item['nombre']}"]
+                    if item['precio_base']:
+                        item_line.append(f" (${int(item['precio_base'])})")
+                    if item['descripcion']:
+                        item_line.append(f": {item['descripcion']}")
+                    if item['numero_de_piezas']:
+                        item_line.append(f" ({item['numero_de_piezas']} piezas)")
+                    menu_text.append("".join(item_line))
+
+            return "\n".join(menu_text)
+        except Exception as e:
+            return f"Error al obtener el menú: {str(e)}"
+
+    async def _format_locales_for_prompt(self) -> str:
         """Formatea la información de locales para el prompt del sistema"""
-        if not self.locales_data or not self.locales_data.get("locations"):
-            return "Información de locales no disponible"
-        
-        locales_text = [f"\n{self.locales_data['title']}"]
-        
-        for local in self.locales_data["locations"]:
-            local_info = []
-            local_info.append(f"- {local['name']}")
-            if local.get('address'):
-                local_info.append(f"\n  Dirección: {local['address']}")
-            if local.get('phone'):
-                local_info.append(f"\n  Teléfono: {local['phone']}")
-            locales_text.append("".join(local_info))
-        
-        return "\n".join(locales_text)
+        try:
+            locations = await self.get_active_locations()
+            if not locations:
+                return "Información de locales no disponible"
+
+            locales_text = ["\nNuestros Locales:"]
+            for local in locations:
+                local_info = []
+                local_info.append(f"- {local['nombre']}")
+                if local['direccion']:
+                    local_info.append(f"\n  Dirección: {local['direccion']}")
+                if local['telefono']:
+                    local_info.append(f"\n  Teléfono: {local['telefono']}")
+                locales_text.append("".join(local_info))
+
+            return "\n".join(locales_text)
+        except Exception as e:
+            return f"Error al obtener información de locales: {str(e)}"
     
-    async def process_message(self, message: str) -> str:
-        """Procesa el mensaje del usuario y genera una respuesta"""
-        
-        # Construir el contexto de la conversación
-        messages = [
-            {
-                "role": "system",
-                "content": self._get_system_prompt()
-            }
+    def _message_needs_schema(self, message: str) -> bool:
+        """
+        Determina si el mensaje requiere incluir el esquema de la base de datos
+        basado en palabras clave relacionadas con pedidos y datos de usuario.
+        """
+        keywords = [
+            '#order', '#user_data', 'confirmar pedido', 'quiero pagar',
+            'mi nombre', 'mi dirección', 'mi direccion', 'envialo', 'envíalo',
+            'pedido', 'pedir', 'comprar', 'ordenar', 'registrar', 'registrame',
+            'regístrame', 'datos', 'información', 'informacion'
         ]
-        
-        # Agregar historial de conversación
-        messages.extend(self.conversation_history)
-        
-        # Agregar mensaje actual
-        messages.append({"role": "user", "content": message})
-        
-        # Generar respuesta
-        response = await self.client.chat.completions.create(
-            model=os.getenv("GPT_MODEL", "gpt-4"),
-            messages=messages,
-            temperature=0.7,
-            max_tokens=250
-        )
-        
-        # Guardar la conversación
-        self.conversation_history.append({"role": "user", "content": message})
-        self.conversation_history.append({"role": "assistant", "content": response.choices[0].message.content})
-        
-        return response.choices[0].message.content
+        return any(keyword in message.lower() for keyword in keywords)
+
+    async def process_message(self, message: str, session: AsyncSession = None) -> str:
+        """Procesa un mensaje del usuario y retorna la respuesta"""
+        try:
+            # Si se proporciona una sesión, inicializar datos del usuario
+            if session:
+                await self.initialize_user_data(session, message, "whatsapp")
+            
+            # Siempre incluir el menú en el prompt
+            include_menu = True
+            
+            # Determinar si necesitamos incluir el esquema
+            include_schema = len(self.conversation_history) == 0 or self._message_needs_schema(message)
+            
+            # Usar el prompt cacheado correspondiente o generarlo si no existe
+            cache_key = (include_menu, include_schema)
+            if cache_key not in self.prompt_cache:
+                self.prompt_cache[cache_key] = await self._get_system_prompt(
+                    include_menu=include_menu,
+                    include_schema=include_schema
+                )
+            system_prompt = self.prompt_cache[cache_key]
+            
+            # Preparar los mensajes para Claude
+            messages = [
+                {"role": "system", "content": system_prompt}
+            ]
+            
+            # Agregar historial de conversación
+            for msg_pair in self.conversation_history[-5:]:  # Mantener solo los últimos 5 pares
+                messages.append({"role": "user", "content": msg_pair[0]})
+                messages.append({"role": "assistant", "content": msg_pair[1]})
+            
+            # Agregar el mensaje actual
+            messages.append({"role": "user", "content": message})
+            
+            try:
+                # Generar respuesta
+                response = await self.client.messages.create(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=1000,
+                    temperature=0.7
+                )
+                
+                # Guardar en el historial
+                self.conversation_history.append((message, response.content[0].text))
+                if len(self.conversation_history) > 10:  # Mantener historial limitado
+                    self.conversation_history.pop(0)
+                
+                return response.content[0].text
+                
+            except Exception as e:
+                logger.error(f"Error al procesar mensaje con Claude: {str(e)}")
+                return "Lo siento, hubo un error al procesar tu mensaje. Por favor, intenta nuevamente."
+                
+        except Exception as e:
+            logger.error(f"Error general en process_message: {str(e)}")
+            return "Lo siento, ocurrió un error inesperado. Por favor, intenta nuevamente."
     
-    def _get_system_prompt(self) -> str:
+    async def _get_system_prompt(self, include_menu: bool = True, include_schema: bool = False) -> str:
         """Obtiene el prompt del sistema"""
-        menu_str = self._format_menu_for_prompt()
-        locales_str = self._format_locales_for_prompt()
+        locales_str = await self._format_locales_for_prompt()
+        
+        # Obtener el esquema solo si es necesario
+        schema_block = ""
+        if include_schema:
+            schema_str = self._format_schema_for_prompt()
+            schema_block = f"\n{schema_str}\n"
         
         # Determinar si el usuario tiene dirección registrada
         has_registered_address = "true" if self.user_address else "false"
@@ -135,158 +279,78 @@ class TestAIAgent:
         
         return f"""Eres un asistente virtual de Hatsu Sushi - Vicente Lopez.
         Tu objetivo es ayudar a los clientes a realizar pedidos y responder sus consultas.
-        
+        {schema_block}
         Estado actual del usuario:
         - Dirección registrada: {has_registered_address}
         - Dirección: {registered_address}
         
+        Información de Locales:
+        {locales_str}
+
         Reglas:
         1. Sé amable y profesional
         2. Habla en español
         3. Si el cliente solicita hablar con un humano, indícalo claramente
         4. Verifica los datos del pedido antes de confirmarlo
         5. Mantén un tono conversacional pero eficiente
-        6. Sugiere promociones cuando sea apropiado
+        6. Si el cliente pregunta por el menú, muéstralo completo y ordenado
         7. Si el cliente pregunta por locales, proporciona la información detallada
-        8. IMPORTANTE: Solo puedes tomar pedidos para el local de Vicente Lopez. Si el cliente quiere ordenar en otro local, explica amablemente que por el momento solo se pueden hacer pedidos para Vicente Lopez, pero puedes proporcionarle la información de contacto del local que desea
-        9. IMPORTANTE: Cuando el cliente confirma un pedido:
-           a. PRIMERO pregunta si desea retirar el pedido en el local o que se lo enviemos
-           b. DESPUÉS pregunta cómo desea pagar:
-              - Ofrece las opciones: Efectivo o MercadoPago
-              - Espera la confirmación del método de pago
-           c. Si elige retirarlo:
-              - Incluye el formato #ORDER con is_takeaway:true y el medio_pago elegido
-              - Confirma que puede retirarlo en Vicente Lopez
-           d. Si elige envío a domicilio:
-              - Si tiene dirección registrada ({registered_address}), pregunta si desea usar esa dirección
-              - Si NO tiene dirección registrada, solicita sus datos
-              - DESPUÉS incluye el formato #ORDER con is_takeaway:false y el medio_pago elegido
-        10. IMPORTANTE: Si el cliente está confirmando un pedido previo, usa los últimos detalles discutidos para generar el #ORDER
-        11. MUY IMPORTANTE: En el JSON del pedido (#ORDER), usa SOLO el nombre exacto del producto sin agregar "x Npz" o cantidades
-        12. IMPORTANTE: NUNCA pidas una nueva dirección si el usuario ya tiene una registrada ({has_registered_address}), solo pide confirmar si es correcta
-        13. Si el cliente proporciona sus datos personales, debes incluirlos en el formato #USER_DATA
-        14. IMPORTANTE: En el saludo inicial, solo usa el nombre del usuario si está registrado. NO menciones la dirección registrada hasta el momento de confirmar el pedido
-        15. IMPORTANTE: Si el cliente dice "envialo a mi direccion" o similar, y tiene dirección registrada, usa esa dirección y genera el #ORDER
-        16. IMPORTANTE: Al buscar productos en el menú, sé flexible con las variaciones en el nombre:
-            - Maneja singular/plural (ej: "milanesa"/"milanesas", "roll"/"rolls")
-            - Ignora mayúsculas/minúsculas
-            - Reconoce variaciones comunes (ej: "california"/"cali", "philadelfia"/"fila")
-            - Si hay múltiples coincidencias o similitudes, pregunta al cliente para confirmar
-            - Si no encuentras una coincidencia exacta, busca coincidencias parciales
+        8. IMPORTANTE: Solo puedes tomar pedidos para el local de Vicente Lopez
+        9. IMPORTANTE: Para procesar un pedido:
+           a. Confirma los productos y cantidades con el cliente
+           b. Pregunta si retira o envío a domicilio
+           c. Pregunta método de pago (Efectivo/MercadoPago)
+           d. Si tiene dirección registrada, confirma usarla
+           e. Si no tiene dirección, solicita los datos
+        10. IMPORTANTE: Al generar #ORDER:
+            a. Usa el nombre EXACTO del producto del menú
+            b. Verifica que el precio coincida con el menú
+            c. Calcula correctamente subtotales y total
 
-        Ejemplos de búsqueda flexible:
-        Cliente: "quiero unas milanesas"
-        Tú: "¡Claro! Tenemos una deliciosa Milanesa de pollo con papas fritas a $15750. ¿Te gustaría ordenarla?"
-
-        Cliente: "dame un cali roll"
-        Tú: "¡Excelente elección! El California Roll cuesta $1200. ¿Deseas ordenarlo?"
-
-        Cliente: "quiero un fila"
-        Tú: "¿Te refieres al Philadelphia Roll? Cuesta $1200. ¿Te gustaría ordenarlo?"
-
-        Menú disponible (Solo para Vicente Lopez):
-        {menu_str}
-        
-        Información de Locales:
-        {locales_str}
-        
-        Formatos de respuesta especiales (no mostrar al cliente):
-        - Para crear un pedido: #ORDER:{{"total":1234,"items":[{{"product":"nombre","quantity":1,"precio_unitario":1234,"subtotal":1234}}],"is_takeaway":true/false,"medio_pago":"efectivo/mercadopago"}}
-        - Para derivar a humano: #HUMAN
-        - Para guardar datos de usuario: #USER_DATA:{{"nombre":"Juan Pérez","email":"juan@email.com","direccion":"Av. Maipú 1234"}}
-        
-        Ejemplo de flujo con retiro en local:
-        Cliente: "Hola"
-        Tú: "¡Hola! Bienvenido a Hatsu Sushi. ¿En qué puedo ayudarte hoy?"
-
-        Cliente: "Quiero un California Roll"
-        Tú: "¡Excelente elección! Te confirmo el pedido:
-        - 1 California Roll x 8pz ($1200 c/u)
-        Total: $1200
-        
-        ¿Deseas confirmar este pedido?"
-
-        Cliente: "sí"
-        Tú: "¡Perfecto! ¿Deseas retirar el pedido en nuestro local de Vicente Lopez o prefieres que te lo enviemos a domicilio?"
-
-        Cliente: "lo retiro"
-        Tú: "¿Cómo deseas realizar el pago? Las opciones son: Efectivo o MercadoPago"
-
-        Cliente: "efectivo"
-        Tú: "¡Excelente! Tu pedido estará listo para retirar en nuestro local de Vicente Lopez. Te avisaremos cuando puedas pasar a buscarlo."
-
-        #ORDER:{{"total":1200,"items":[{{"product":"California Roll","quantity":1,"precio_unitario":1200,"subtotal":1200}}],"is_takeaway":true,"medio_pago":"efectivo"}}
-
-        Ejemplo de flujo con envío a domicilio (usuario con dirección):
-        Cliente: "Quiero un Dragon Roll"
-        Tú: "¡Excelente elección! Te confirmo el pedido:
-        - 1 Dragon Roll x 8pz ($2200 c/u)
-        Total: $2200
-        
-        ¿Deseas confirmar este pedido?"
-
-        Cliente: "sí"
-        Tú: "¡Perfecto! ¿Deseas retirar el pedido en nuestro local de Vicente Lopez o prefieres que te lo enviemos a domicilio?"
-
-        Cliente: "quiero que me lo envíen"
-        Tú: "Veo que tienes registrada la dirección: {registered_address}. ¿Deseas que enviemos el pedido a esta dirección?"
-
-        Cliente: "sí, está bien"
-        Tú: "¿Cómo deseas realizar el pago? Las opciones son: Efectivo o MercadoPago"
-
-        Cliente: "mercadopago"
-        Tú: "¡Excelente! Tu pedido será enviado a {registered_address}. Te avisaremos cuando esté en camino."
-
-        #ORDER:{{"total":2200,"items":[{{"product":"Dragon Roll","quantity":1,"precio_unitario":2200,"subtotal":2200}}],"is_takeaway":false,"medio_pago":"mercadopago"}}
-
-        Ejemplo de flujo con envío a domicilio (usuario nuevo):
-        Cliente: "Quiero un Mex Roll"
-        Tú: "¡Excelente elección! Te confirmo el pedido:
-        - 1 Mex Roll x 8pz ($1500 c/u)
-        Total: $1500
-        
-        ¿Deseas confirmar este pedido?"
-
-        Cliente: "sí"
-        Tú: "¡Perfecto! ¿Deseas retirar el pedido en nuestro local de Vicente Lopez o prefieres que te lo enviemos a domicilio?"
-
-        Cliente: "quiero delivery"
-        Tú: "Para poder enviarte el pedido, necesito algunos datos. ¿Podrías proporcionarme tu nombre y dirección de entrega?"
-
-        Cliente: "Me llamo Juan Pérez y vivo en Av. Maipú 1234"
-        Tú: "¡Gracias Juan! He guardado tus datos. Tu pedido será enviado a Av. Maipú 1234. Te avisaremos cuando esté en camino."
-
-        #USER_DATA:{{"nombre":"Juan Pérez","direccion":"Av. Maipú 1234"}}
-        #ORDER:{{"total":1500,"items":[{{"product":"Mex Roll","quantity":1,"precio_unitario":1500,"subtotal":1500}}],"is_takeaway":false,"medio_pago":"efectivo"}}
-
-        IMPORTANTE: Al mostrar precios en cualquier mensaje, asegúrate de:
-        1. Usar el símbolo $ antes del número
-        2. Usar puntos como separadores de miles
-        3. No mostrar decimales
-        4. Ejemplos de formato correcto:
-           - $1.200
-           - $15.750
-           - $170.190
-        5. Ejemplos de formato incorrecto:
-           - $1200
-           - $15750
-           - $170190
-
-        IMPORTANTE: Al calcular el total del pedido en el mensaje de confirmación previo, asegúrate de:
-        1. Usar el precio_unitario correcto para cada item
-        2. Calcular el subtotal como precio_unitario * cantidad
-        3. Sumar todos los subtotales para obtener el total
-        4. Mostrar el total de manera concisa como "Total: $XXXXX" sin desglosar los subtotales
-        5. Ejemplo de formato correcto:
-           - 10x Milanesa de pollo con papas fritas ($15.750 c/u)
-           - 1x Azteca x 10pz ($12.690)
-           Total: $170.190
-           
-           ¿Deseas confirmar este pedido?
+        Formatos especiales:
+        - Pedido: #ORDER:{{"total":1234,"items":[{{"product":"nombre","quantity":1,"precio_unitario":1234,"subtotal":1234}}],"is_takeaway":true/false,"medio_pago":"efectivo/mercadopago"}}
+        - Humano: #HUMAN
+        - Datos: #USER_DATA:{{"nombre":"Juan","email":"juan@email.com","direccion":"Av. X"}}
         """
+
+    def invalidate_prompt_cache(self):
+        """Invalida todas las versiones cacheadas del prompt del sistema"""
+        self.prompt_cache.clear()
+
+    async def initialize_user_data(self, session: AsyncSession, phone: str, origen: str = "whatsapp"):
+        """Inicializa los datos del usuario desde la base de datos"""
+        try:
+            # Limpiar el número de teléfono si viene de WhatsApp
+            clean_phone = phone.replace("whatsapp:", "")
+            
+            query = sql_text("""
+                SELECT nombre, direccion, email 
+                FROM hatsu.usuarios
+                WHERE telefono = :phone 
+                AND origen = :origen 
+                AND (nombre IS NOT NULL OR direccion IS NOT NULL OR email IS NOT NULL)
+            """)
+            result = await session.execute(query, {"phone": clean_phone, "origen": origen})
+            row = result.first()
+            
+            if row:
+                self.user_name = row[0]
+                self.user_address = row[1]
+                self.user_email = row[2]
+                if self.user_address:
+                    self.address_confirmed = True
+                
+                # Invalidar el caché del prompt ya que los datos del usuario cambiaron
+                self.invalidate_prompt_cache()
+                
+            return True
+        except Exception as e:
+            logger.error(f"Error inicializando datos de usuario: {str(e)}")
+            return False
 
 async def main():
     agent = TestAIAgent()
+    await agent.init_db()
     print("¡Bienvenido al sistema de prueba de Hatsu Sushi - Vicente Lopez!")
     print("Escribe 'salir' para terminar la conversación.")
     print("-" * 50)
@@ -301,6 +365,9 @@ async def main():
             print("\nAgente:", response)
         except Exception as e:
             print(f"\nError: {str(e)}")
+    
+    if agent.db_pool:
+        await agent.db_pool.close()
 
 if __name__ == "__main__":
     asyncio.run(main()) 

@@ -188,9 +188,19 @@ async def get_media_url(media_id: str, media_type: str = "image"):
 
 @app.get("/webhook")
 async def verify_webhook(request: Request):
+    """
+    Maneja la verificación del webhook de WhatsApp
+    """
     params = dict(request.query_params)
+    logger.info("=== VERIFICACIÓN DE WEBHOOK ===")
+    logger.info(f"Parámetros recibidos: {params}")
+    logger.info(f"Token configurado: {os.getenv('WEBHOOK_VERIFY_TOKEN')}")
+    
     if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == os.getenv("WEBHOOK_VERIFY_TOKEN"):
+        logger.info(f"Verificación exitosa - Challenge: {params.get('hub.challenge')}")
         return int(params.get("hub.challenge"))
+    
+    logger.error(f"Verificación fallida - Token recibido: {params.get('hub.verify_token')} vs Token esperado: {os.getenv('WEBHOOK_VERIFY_TOKEN')}")
     return {"status": "error", "message": "Verificación fallida"}
 
 @app.post("/webhook")
@@ -199,18 +209,47 @@ async def whatsapp_webhook(
     session: AsyncSession = Depends(get_db)
 ):
     try:
+        # Log request headers
+        headers = dict(request.headers)
+        logger.info("=== NUEVO MENSAJE WEBHOOK ===")
+        logger.info(f"Headers recibidos: {json.dumps(headers, indent=2)}")
+        
+        # Log raw body
+        body_bytes = await request.body()
+        logger.info(f"Body raw: {body_bytes.decode()}")
+        
         payload = await request.json()
-        logger.info(f"Datos completos recibidos en webhook: {json.dumps(payload, indent=2)}")
+        logger.info(f"Payload parseado: {json.dumps(payload, indent=2)}")
 
-        entry = payload.get("entry", [])[0]
-        changes = entry.get("changes", [])[0]
-        value = changes.get("value", {})
-        messages = value.get("messages", [])
+        # Verificar estructura del payload
+        if "object" not in payload:
+            logger.error("Payload no contiene 'object'")
+            return {"status": "error", "message": "Invalid payload structure"}
 
-        if not messages:
+        if payload["object"] != "whatsapp_business_account":
+            logger.error(f"Objeto incorrecto: {payload['object']}")
+            return {"status": "error", "message": "Not a WhatsApp message"}
+
+        if "entry" not in payload or not payload["entry"]:
+            logger.error("No hay entries en el payload")
+            return {"status": "error", "message": "No entries found"}
+
+        entry = payload["entry"][0]
+        if "changes" not in entry or not entry["changes"]:
+            logger.error("No hay changes en el entry")
+            return {"status": "error", "message": "No changes found"}
+
+        changes = entry["changes"][0]
+        if "value" not in changes:
+            logger.error("No hay value en changes")
+            return {"status": "error", "message": "No value found"}
+
+        value = changes["value"]
+        if "messages" not in value or not value["messages"]:
+            logger.error("No hay messages en value")
             return {"status": "ok", "message": "No hay mensajes nuevos"}
 
-        message = messages[0]
+        message = value["messages"][0]
         from_number = message["from"]
         message_type = message.get("type", "text")
         
@@ -282,7 +321,11 @@ async def whatsapp_webhook(
         # Obtener o crear el agente para este usuario
         current_time = time.time()
         if usuario_id not in user_agents:
-            agent = TestAIAgent(menu_data=menu_data, locales_data=locales_data)
+            agent = TestAIAgent()
+            # Inicializar la base de datos si no está inicializada
+            if not agent.db_pool:
+                await agent.init_db()
+            # Inicializar datos del usuario
             await agent.initialize_user_data(session, from_number, "whatsapp")
             user_agents[usuario_id] = (agent, current_time)
             logger.info(f"Nuevo agente creado para usuario {usuario_id}")
@@ -325,16 +368,12 @@ async def whatsapp_webhook(
                 full_response = await agent.process_message(
                     message=body,
                     session=session,
-                    phone=from_number.replace("whatsapp:", ""),
-                    origen="whatsapp",
                     media_url=media_url
                 )
             else:
                 full_response = await agent.process_message(
                     message=body,
-                    session=session,
-                    phone=from_number.replace("whatsapp:", ""),
-                    origen="whatsapp"
+                    session=session
                 )
             logger.info(f"Respuesta completa del agente: {full_response}")
 

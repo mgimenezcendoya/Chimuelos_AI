@@ -8,52 +8,76 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "Chimuelos SA AI Agent"
     
-    # Database
-    DATABASE_URL: PostgresDsn
+    # OpenAI Configuration (legacy)
+    OPENAI_API_KEY: Optional[str] = None
     
-    # Security
-    SECRET_KEY: str
-    ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    # Groq Configuration
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_MODEL: Optional[str] = None
     
-    # OpenAI
-    OPENAI_API_KEY: str
-    GPT_MODEL: str = "gpt-4"
+    # Anthropic (Claude) Configuration
+    ANTHROPIC_API_KEY: str
+    CLAUDE_MODEL: str = "claude-3-7-sonnet-20250219"
     
-    # Twilio
-    TWILIO_ACCOUNT_SID: str
-    TWILIO_AUTH_TOKEN: str
-    TWILIO_PHONE_NUMBER: str
+    # WhatsApp Cloud API Configuration
+    WEBHOOK_VERIFY_TOKEN: str
+    WSP_ACCESS_TOKEN: str
+    WSP_PHONE_NUMBER_ID: str
+    WSP_API_VERSION: str = "v22.0"
+    WSP_BUSINESS_ACCOUNT_ID: str
     
-    # Make.com
-    MAKE_WEBHOOK_URL: str
-    MAKE_API_KEY: str
-    
-    # Airtable
-    AIRTABLE_API_KEY: str
-    AIRTABLE_BASE_ID: str
-    
-    # Redis (for rate limiting and caching)
-    REDIS_URL: Optional[str] = None
+    # Twilio Configuration
+    TWILIO_ACCOUNT_SID: Optional[str] = None
+    TWILIO_AUTH_TOKEN: Optional[str] = None
+    TWILIO_WHATSAPP_NUMBER: Optional[str] = None
     
     # Environment
     ENVIRONMENT: str = "development"
     
+    # Database Configuration
+    DATABASE_URL: Optional[PostgresDsn] = None
+    PGDATA: Optional[str] = None
+    PGDATABASE: Optional[str] = None
+    PGHOST: Optional[str] = None
+    PGPASSWORD: Optional[str] = None
+    PGPORT: Optional[str] = None
+    PGUSER: Optional[str] = None
+    
+    # Security
+    SECRET_KEY: str = "your-secret-key-here"  # Default for development
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    
+    # Make.com (Optional)
+    MAKE_WEBHOOK_URL: Optional[str] = None
+    MAKE_API_KEY: Optional[str] = None
+    
+    # Airtable (Optional)
+    AIRTABLE_API_KEY: Optional[str] = None
+    AIRTABLE_BASE_ID: Optional[str] = None
+    
+    # Redis (for rate limiting and caching)
+    REDIS_URL: Optional[str] = None
+    
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "allow"  # Permite variables adicionales en el .env
 
     @validator("DATABASE_URL", pre=True)
     def assemble_db_connection(cls, v: Optional[str], values: dict) -> Any:
         if isinstance(v, str):
             return v
-        return PostgresDsn.build(
-            scheme="postgresql+asyncpg",
-            user=values.get("POSTGRES_USER"),
-            password=values.get("POSTGRES_PASSWORD"),
-            host=values.get("POSTGRES_SERVER"),
-            path=f"/{values.get('POSTGRES_DB') or ''}",
-        )
+        if all(values.get(key) for key in ["PGUSER", "PGPASSWORD", "PGHOST", "PGPORT", "PGDATABASE"]):
+            return PostgresDsn.build(
+                scheme="postgresql+asyncpg",
+                user=values.get("PGUSER"),
+                password=values.get("PGPASSWORD"),
+                host=values.get("PGHOST"),
+                port=values.get("PGPORT"),
+                path=f"/{values.get('PGDATABASE')}",
+            )
+        return None
 
 @lru_cache()
 def get_settings() -> Settings:
