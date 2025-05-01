@@ -380,7 +380,8 @@ async def save_message(
     orden_id: int = None,
     canal: str = "whatsapp",
     intervencion_humana: bool = False,
-    media_url: str = None
+    media_url: str = None,
+    tokens: int = None
 ):
     """Guarda un mensaje en la tabla hatsu.mensajes
     
@@ -393,6 +394,7 @@ async def save_message(
         canal: Canal del mensaje ('console', 'whatsapp', 'web')
         intervencion_humana: Si el mensaje fue parte de una intervención humana
         media_url: URL de la imagen adjunta al mensaje (opcional)
+        tokens: Número de tokens estimados (opcional)
     
     Returns:
         int: ID del mensaje guardado o None si hubo error
@@ -408,11 +410,11 @@ async def save_message(
             INSERT INTO hatsu.mensajes (
                 usuario_id, orden_id, rol, mensaje, timestamp, 
                 canal, intervencion_humana, intervencion_humana_historial, leido,
-                media_url
+                media_url, tokens
             ) VALUES (
                 :usuario_id, :orden_id, :rol, :mensaje, CURRENT_TIMESTAMP,
                 :canal, :intervencion_humana, :intervencion_humana, false,
-                :media_url
+                :media_url, :tokens
             )
             RETURNING id
         """)
@@ -426,7 +428,8 @@ async def save_message(
                 "mensaje": mensaje,
                 "canal": canal,
                 "intervencion_humana": intervencion_humana,
-                "media_url": media_url
+                "media_url": media_url,
+                "tokens": tokens
             }
         )
         
