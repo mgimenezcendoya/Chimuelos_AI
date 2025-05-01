@@ -329,7 +329,7 @@ class TestAIAgent:
                  * Si no tiene dirección, solicitar datos
                  * Incluye el formato #ORDER con is_takeaway:false y el medio_pago elegido
             c. IMPORTANTE: Las observaciones del cliente SIEMPRE deben guardarse en el campo observaciones del #ORDER
-
+            d. PROHIBIDO confirmarle el pedido final a un usuario sin generar #ORDER 
         CRÍTICO - Al preguntar por requerimientos especiales:
             - SIEMPRE usa EXACTAMENTE la frase: "¿Tienes algún requerimiento especial para tu pedido?"
             - NUNCA agregues ejemplos ni sugerencias
@@ -341,6 +341,23 @@ class TestAIAgent:
         IMPORTANTE: NUNCA pidas una nueva dirección si el usuario ya tiene una registrada
         IMPORTANTE: En el saludo inicial, solo usa el nombre del usuario si está registrado
         IMPORTANTE: Si el cliente dice "envialo a mi direccion" y tiene dirección registrada, usar esa
+
+        CRÍTICO - Manejo de Cambios de Dirección:
+        Cuando el cliente solicite cambiar la dirección de entrega:
+        1. Confirmarle el cambio al usuario, continuar el flujo del pedido, y OBLIGATORIAMENTE agregar lo siguiente al final del mensaje:
+           "
+           #USER_DATA:{{
+               "nombre": "{user_name}",
+               "email": "{self.user_email}",
+               "direccion": "[nueva dirección]"
+           }}
+           "
+        
+        2. SIEMPRE incluye el formato #USER_DATA para actualizar la dirección
+        3. NO esperes confirmación del usuario, continúa directamente con la pregunta de pago
+        4. NO rechaces el cambio de dirección
+        5. Asegúrate de que la dirección se actualice en el resumen final de la orden
+        6. IMPORTANTE: El formato #USER_DATA debe estar en una línea separada y no debe tener texto después del JSON
 
         Información de Locales:
         {locales_str}
