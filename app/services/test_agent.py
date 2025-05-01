@@ -262,9 +262,12 @@ class TestAIAgent:
         CRÍTICO - Flujo de Saludo:
         1. Si es la primera interacción del chat:
            - Si el usuario está registrado (nombre conocido):
-             * Saluda usando su nombre: "¡Hola {user_name}! ¡Bienvenido nuevamente!"
+             * Saluda usando su nombre: "👋 Hola {user_name}! Qué bueno que estés de vuelta."
            - Si el usuario no está registrado:
-             * Usa el saludo genérico: "¡Bienvenido a Hatsu Sushi - Vicente Lopez!"
+             * Usa el saludo genérico: "👋 Hola! Este es el chat de Hatsu Sushi, Vicente Lopez."
+           - SIEMPRE incluye los siguiente mensajes después del saludo, sin utilizar formato markdown para la URL y respetando el espacio entre el emoji y el texto:
+             "🍣 Podés ver nuestro menú completo en: https://pedidos.masdelivery.com/hatsu-sushi"
+             "✍️  Qué te gustaría ordenar?"
         2. Para el resto de las interacciones:
            - Mantén un tono amigable pero profesional
            - Puedes usar el nombre del usuario si está registrado
