@@ -148,6 +148,9 @@ async def whatsapp_webhook(
                 welcome_msg = f"¡Hola {ai_agent.user_name}! ¡Bienvenido nuevamente a Hatsu Sushi - Vicente Lopez!"
             welcome_msg += " Estoy aquí para ayudarte con tu pedido. ¿Qué te gustaría ordenar?"
             
+            # Contar tokens del mensaje de bienvenida
+            welcome_tokens = ai_agent.estimate_prompt_tokens(welcome_msg)
+            
             # Guardar mensaje de bienvenida
             await save_message(
                 session=session,
@@ -155,7 +158,8 @@ async def whatsapp_webhook(
                 mensaje=welcome_msg,
                 rol="agente",
                 canal="whatsapp",
-                media_url=None
+                media_url=None,
+                tokens=welcome_tokens
             )
             await session.commit()
             
@@ -178,6 +182,9 @@ async def whatsapp_webhook(
         # Si solo hay imagen sin texto, usar un mensaje descriptivo
         mensaje_a_guardar = Body if Body else "[Imagen enviada sin texto]"
         
+        # Contar tokens del mensaje del usuario
+        prompt_tokens = ai_agent.estimate_prompt_tokens(mensaje_a_guardar)
+        
         # Guardar mensaje del usuario con intervencion_humana si corresponde
         mensaje_id = await save_message(
             session=session,
@@ -186,7 +193,8 @@ async def whatsapp_webhook(
             rol="usuario",
             canal="whatsapp",
             intervencion_humana=is_human_request,
-            media_url=MediaUrl0
+            media_url=MediaUrl0,
+            tokens=prompt_tokens
         )
         await session.commit()
         
@@ -241,6 +249,9 @@ async def whatsapp_webhook(
                         # Recargar los datos del usuario en el agente
                         await ai_agent.initialize_user_data(session, From.replace("whatsapp:", ""), "whatsapp")
                 
+                # Contar tokens de la respuesta
+                output_tokens = max(1, len(user_message) // 4)
+                
                 # Guardar respuesta del agente
                 await save_message(
                     session=session,
@@ -248,7 +259,8 @@ async def whatsapp_webhook(
                     mensaje=user_message,
                     rol="agente",
                     canal="whatsapp",
-                    media_url=None
+                    media_url=None,
+                    tokens=output_tokens
                 )
                 await session.commit()
                 
@@ -272,6 +284,9 @@ async def whatsapp_webhook(
                 logger.error(f"Error procesando mensaje del agente: {str(e)}")
                 error_message = "Lo siento, hubo un problema al procesar tu mensaje. Por favor, intenta nuevamente."
                 
+                # Contar tokens del mensaje de error
+                error_tokens = max(1, len(error_message) // 4)
+                
                 # Guardar mensaje de error
                 await save_message(
                     session=session,
@@ -279,7 +294,8 @@ async def whatsapp_webhook(
                     mensaje=error_message,
                     rol="agente",
                     canal="whatsapp",
-                    media_url=None
+                    media_url=None,
+                    tokens=error_tokens
                 )
                 await session.commit()
                 

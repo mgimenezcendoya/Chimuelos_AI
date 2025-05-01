@@ -87,8 +87,18 @@ async def chat_loop(agent: TestAIAgent):
             welcome_msg = f"¡Hola {agent.user_name}! ¡Bienvenido nuevamente!"
         welcome_msg += " Estoy aquí para ayudarte con tu pedido. ¿Qué te gustaría ordenar?"
         
+        # Contar tokens del mensaje de bienvenida
+        welcome_tokens = agent.estimate_prompt_tokens(welcome_msg)
+        
         # Guardar mensaje de bienvenida
-        await save_message(session, usuario_id, welcome_msg, "agente", canal="console")
+        await save_message(
+            session=session,
+            usuario_id=usuario_id,
+            mensaje=welcome_msg,
+            rol="agente",
+            canal="console",
+            tokens=welcome_tokens
+        )
         await session.commit()
         print(f"\nBot: {welcome_msg}")
         
@@ -103,14 +113,18 @@ async def chat_loop(agent: TestAIAgent):
                 # Verificar si el usuario está solicitando intervención humana
                 is_human_request = user_input.lower() in ["#human", "hablar con humano", "operador", "ayuda humana"] or "hablar con" in user_input.lower()
                 
+                # Contar tokens del mensaje del usuario
+                prompt_tokens = agent.estimate_prompt_tokens(user_input)
+                
                 # Guardar mensaje del usuario con intervencion_humana si corresponde
                 await save_message(
-                    session, 
-                    usuario_id, 
-                    user_input, 
-                    "usuario", 
+                    session=session,
+                    usuario_id=usuario_id,
+                    mensaje=user_input,
+                    rol="usuario",
                     canal="console",
-                    intervencion_humana=is_human_request
+                    intervencion_humana=is_human_request,
+                    tokens=prompt_tokens
                 )
                 await session.commit()
                 
@@ -119,13 +133,18 @@ async def chat_loop(agent: TestAIAgent):
                     await mark_conversation_for_human(session, usuario_id, canal="console")
                     human_msg = "Tu mensaje ha sido recibido y será atendido por un operador humano pronto."
                     print("\nBot:", human_msg)
+                    
+                    # Contar tokens del mensaje de transición
+                    human_tokens = max(1, len(human_msg) // 4)
+                    
                     await save_message(
-                        session,
-                        usuario_id,
-                        human_msg,
-                        "agente",
+                        session=session,
+                        usuario_id=usuario_id,
+                        mensaje=human_msg,
+                        rol="agente",
                         canal="console",
-                        intervencion_humana=True
+                        intervencion_humana=True,
+                        tokens=human_tokens
                     )
                     await session.commit()
                     continue
@@ -171,8 +190,18 @@ async def chat_loop(agent: TestAIAgent):
                             # Recargar los datos del usuario en el agente
                             await agent.initialize_user_data(session, "console", "console")
                     
+                    # Contar tokens de la respuesta
+                    output_tokens = max(1, len(user_message) // 4)
+                    
                     # Guardar respuesta del agente
-                    await save_message(session, usuario_id, user_message, "agente", canal="console")
+                    await save_message(
+                        session=session,
+                        usuario_id=usuario_id,
+                        mensaje=user_message,
+                        rol="agente",
+                        canal="console",
+                        tokens=output_tokens
+                    )
                     await session.commit()
                     
                     # Mostrar respuesta
@@ -181,7 +210,18 @@ async def chat_loop(agent: TestAIAgent):
             except Exception as e:
                 logger.error(f"Error en el chat: {str(e)}")
                 error_msg = "Lo siento, ocurrió un error. ¿Podrías intentarlo de nuevo?"
-                await save_message(session, usuario_id, error_msg, "agente", canal="console")
+                
+                # Contar tokens del mensaje de error
+                error_tokens = max(1, len(error_msg) // 4)
+                
+                await save_message(
+                    session=session,
+                    usuario_id=usuario_id,
+                    mensaje=error_msg,
+                    rol="agente",
+                    canal="console",
+                    tokens=error_tokens
+                )
                 await session.commit()
                 print("\nBot:", error_msg)
 

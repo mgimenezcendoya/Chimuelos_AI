@@ -16,7 +16,10 @@ load_dotenv()
 
 class TestAIAgent:
     def __init__(self, menu_data=None, locales_data=None):
-        self.client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        self.client = AsyncOpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            project=os.getenv("OPENAI_PROJECT_ID")
+        )
         self.conversation_history = []
         self.menu_data = menu_data if menu_data else {}
         self.locales_data = locales_data if locales_data else {}
@@ -476,6 +479,16 @@ class TestAIAgent:
         except Exception as e:
             logger.error(f"Error al inicializar datos del usuario: {str(e)}")
             return False
+
+    def estimate_prompt_tokens(self, user_message: str) -> int:
+        """Cuenta los caracteres del prompt completo y divide entre 4 (mínimo 1)."""
+        mensajes = [
+            {"role": "system", "content": self._get_system_prompt()}
+        ] + self.conversation_history + [
+            {"role": "user", "content": user_message}
+        ]
+        texto_completo = "".join(m["content"] for m in mensajes)
+        return max(1, len(texto_completo) // 4)
 
 async def main():
     agent = TestAIAgent()
