@@ -231,7 +231,11 @@ async def whatsapp_webhook(
                 if "#USER_DATA:" in full_response:
                     parts = full_response.split("#USER_DATA:")
                     user_message = parts[0].strip()
+                    # Extract the user data JSON and clean it up
                     user_data = parts[1].strip()
+                    # Remove any trailing text after the JSON object
+                    if "}" in user_data:
+                        user_data = user_data[:user_data.rindex("}") + 1]
                     # Actualizar datos del usuario
                     if await update_user_data(f"#USER_DATA:{user_data}", session, From):
                         # Recargar los datos del usuario en el agente

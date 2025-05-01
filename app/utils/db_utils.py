@@ -283,7 +283,9 @@ async def update_user_data(text: str, session: AsyncSession, phone: str, origen:
     """Actualiza los datos del usuario"""
     try:
         if "#USER_DATA:" in text:
-            user_data_json = text.split("#USER_DATA:")[1].strip()
+            # Separar el JSON de la orden del resto del mensaje
+            parts = text.split("#USER_DATA:")
+            user_data_json = parts[1].split("\n\n")[0].strip()  # Tomar solo la parte del JSON
             user_data = json.loads(user_data_json)
             
             # Limpiar el número de teléfono si viene de WhatsApp
