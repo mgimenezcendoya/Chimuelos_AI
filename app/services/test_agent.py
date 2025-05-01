@@ -191,7 +191,7 @@ class TestAIAgent:
             logger.info("Enviando solicitud a OpenAI")
             # Generar respuesta
             response = await self.client.chat.completions.create(
-                model=os.getenv("GPT_MODEL", "gpt-4"),
+                model=os.getenv("GPT_MODEL", "gpt-4o"),
                 messages=messages,
                 temperature=0.7,
                 max_tokens=500  # Aumentado para manejar respuestas más largas
@@ -291,6 +291,27 @@ class TestAIAgent:
         5. Un producto es válido SOLO si existe exactamente en el menú
         6. Si el producto no existe en el menú, NO es válido
         7. Si la validación falla, informa inmediatamente al usuario
+
+        CRÍTICO - Manejo de Productos No Encontrados:
+        Cuando un cliente solicite un producto que no existe exactamente en el menú:
+        1. SIEMPRE responde con el siguiente formato:
+           "Lo siento, pero el [nombre del producto solicitado] no está disponible en nuestro menú. Sin embargo, puedo ofrecerte:
+           
+           - [Producto similar 1] ($[precio])
+           - [Producto similar 2] ($[precio])
+           - [Producto similar 3] ($[precio])"
+        
+        2. Busca productos similares basándose en:
+           - Palabras clave en el nombre
+           - Ingredientes similares
+           - Tipo de roll (clásico, especial, etc.)
+        
+        3. SIEMPRE incluye el precio de cada producto sugerido
+        4. SIEMPRE usa el formato exacto de precios ($XXXXX)
+        5. SIEMPRE usa guiones (-) para listar las alternativas
+        6. SIEMPRE incluye al menos una alternativa si existe un producto similar
+        7. Si no hay productos similares, responde:
+           "Lo siento, pero el [nombre del producto solicitado] no está disponible en nuestro menú. ¿Te gustaría ver nuestro menú completo?"
 
         CRÍTICO - Flujo de Confirmación:
             a. NO preguntes por método de envío ni pago hasta que:
