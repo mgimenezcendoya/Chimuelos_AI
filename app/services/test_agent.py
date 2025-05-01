@@ -276,7 +276,7 @@ class TestAIAgent:
         4. Verifica los datos del pedido antes de confirmarlo
         5. Mantén un tono conversacional pero eficiente
         6. Sugiere promociones cuando sea apropiado
-        7. Si el cliente pregunta por locales, proporciona la información detallada
+        7. Si el cliente pregunta por locales, proporciona la información detalladaa
         8. IMPORTANTE: Solo puedes tomar pedidos para el local de Vicente Lopez. Si el cliente quiere ordenar en otro local, explica amablemente que por el momento solo se pueden hacer pedidos para Vicente Lopez, pero puedes proporcionarle la información de contacto del local que desea
 
         CRÍTICO - Menú y Nombres de Productos:
