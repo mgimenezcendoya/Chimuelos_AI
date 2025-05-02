@@ -34,7 +34,7 @@ load_dotenv()
 logger.info("Variables de entorno cargadas")
 
 # Configuración de Twilio
-SANDBOX_NUMBER = 'whatsapp:+14155238886'  # Número fijo del sandbox
+SANDBOX_NUMBER = os.getenv('TWILIO_WHATSAPP_NUMBER')  # Número fijo del sandbox
 twilio_client = Client(
     os.getenv('TWILIO_ACCOUNT_SID'),
     os.getenv('TWILIO_AUTH_TOKEN')
@@ -227,10 +227,13 @@ async def whatsapp_webhook(
                 if "#ORDER:" in full_response:
                     parts = full_response.split("#ORDER:")
                     user_message = parts[0].strip()
-                    order_data = parts[1].strip()
+                    order_json = parts[1].strip()
+                    # Limpiar el JSON para asegurar que no haya texto adicional
+                    if "}" in order_json:
+                        order_json = order_json[:order_json.rindex("}") + 1]
                     # Procesar la orden
                     logger.info(f"Procesando orden de WhatsApp para {From}")
-                    order_success, is_new_user, confirmation_message = await process_order(f"#ORDER:{order_data}", session, From)
+                    order_success, is_new_user, confirmation_message = await process_order(f"#ORDER:{order_json}", session, From)
                     if order_success:
                         user_message = confirmation_message
                     else:
