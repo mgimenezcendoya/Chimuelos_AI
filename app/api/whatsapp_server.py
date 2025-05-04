@@ -11,6 +11,7 @@ from datetime import datetime
 import sys
 from pathlib import Path
 from sqlalchemy.sql import text as sql_text
+import time
 
 # Agregar el directorio raíz al path para poder importar desde app
 root_dir = Path(__file__).parent.parent.parent
@@ -41,8 +42,34 @@ twilio_client = Client(
 )
 logger.info("Cliente Twilio inicializado")
 
+# Diccionario para almacenar los agentes por usuario y su última actividad
+user_agents = {}  # {usuario_id: (TestAIAgent, last_seen_timestamp)}
+
+# Constante para el tiempo de inactividad (24 horas en segundos)
+INACTIVITY_THRESHOLD = 60 * 60 * 24
+
+async def cleanup_inactive_agents():
+    """
+    Limpia los agentes que han estado inactivos por más de 24 horas.
+    """
+    current_time = time.time()
+    inactive_users = []
+    
+    # Identificar usuarios inactivos
+    for usuario_id, (agent, last_seen) in user_agents.items():
+        if current_time - last_seen > INACTIVITY_THRESHOLD:
+            inactive_users.append(usuario_id)
+    
+    # Eliminar usuarios inactivos
+    for usuario_id in inactive_users:
+        del user_agents[usuario_id]
+    
+    if inactive_users:
+        logger.info(f"Limpieza de agentes completada: {len(inactive_users)} agentes eliminados por inactividad")
+
 # Instanciar el agente
-ai_agent = None
+menu_data = None
+locales_data = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -51,16 +78,13 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Base de datos inicializada")
     
-    # Obtener menú y locales, y crear agente
+    # Obtener menú y locales
     async with async_session() as session:
-        menu = await get_menu_from_db(session)
-        locales = await get_locales_from_db(session)
+        global menu_data, locales_data
+        menu_data = await get_menu_from_db(session)
+        locales_data = await get_locales_from_db(session)
         
-        if menu:
-            global ai_agent
-            ai_agent = TestAIAgent(menu_data=menu, locales_data=locales)
-            logger.info("Agente AI inicializado con menú y locales de la base de datos")
-        else:
+        if not menu_data:
             logger.warning("No se pudo obtener el menú de la base de datos")
     
     yield
@@ -138,18 +162,31 @@ async def whatsapp_webhook(
         usuario_id = result.scalar_one()
         await session.commit()
         
-        # Inicializar datos del usuario en el agente
-        await ai_agent.initialize_user_data(session, From.replace("whatsapp:", ""), "whatsapp")
+        # Obtener o crear el agente para este usuario
+        current_time = time.time()
+        if usuario_id not in user_agents:
+            if not menu_data or not locales_data:
+                logger.error("No se puede crear el agente: menú o locales no disponibles")
+                return {"status": "error", "message": "Servicio no disponible temporalmente"}
+                
+            agent = TestAIAgent(menu_data=menu_data, locales_data=locales_data)
+            await agent.initialize_user_data(session, From.replace("whatsapp:", ""), "whatsapp")
+            user_agents[usuario_id] = (agent, current_time)
+            logger.info(f"Nuevo agente creado para usuario {usuario_id}")
+        else:
+            agent, _ = user_agents[usuario_id]
+            user_agents[usuario_id] = (agent, current_time)  # Actualizar timestamp
+            logger.info(f"Usando agente existente para usuario {usuario_id}")
         
         # Si es un mensaje de unión al sandbox, responder apropiadamente
         if Body and Body.lower().startswith('join'):
             welcome_msg = "¡Bienvenido a Hatsu Sushi - Vicente Lopez!"
-            if ai_agent.user_name:
-                welcome_msg = f"¡Hola {ai_agent.user_name}! ¡Bienvenido nuevamente a Hatsu Sushi - Vicente Lopez!"
+            if agent.user_name:
+                welcome_msg = f"¡Hola {agent.user_name}! ¡Bienvenido nuevamente a Hatsu Sushi - Vicente Lopez!"
             welcome_msg += " Estoy aquí para ayudarte con tu pedido. ¿Qué te gustaría ordenar?"
             
             # Contar tokens del mensaje de bienvenida
-            welcome_tokens = ai_agent.estimate_prompt_tokens(welcome_msg)
+            welcome_tokens = agent.estimate_prompt_tokens(welcome_msg)
             
             # Guardar mensaje de bienvenida
             await save_message(
@@ -170,6 +207,7 @@ async def whatsapp_webhook(
                     to=From
                 )
                 logger.info(f"Mensaje de bienvenida enviado con SID: {message.sid}")
+                await cleanup_inactive_agents()  # Limpiar agentes inactivos
             except Exception as e:
                 logger.error(f"Error enviando mensaje de bienvenida: {str(e)}")
             return {"status": "success", "message": welcome_msg}
@@ -183,7 +221,7 @@ async def whatsapp_webhook(
         mensaje_a_guardar = Body if Body else "[Imagen enviada sin texto]"
         
         # Contar tokens del mensaje del usuario
-        prompt_tokens = ai_agent.estimate_prompt_tokens(mensaje_a_guardar)
+        prompt_tokens = agent.estimate_prompt_tokens(mensaje_a_guardar)
         
         # Guardar mensaje del usuario con intervencion_humana si corresponde
         mensaje_id = await save_message(
@@ -204,12 +242,14 @@ async def whatsapp_webhook(
         if is_human_request:
             # Activar intervención humana y retornar el mensaje de transición
             await mark_conversation_for_human(session, usuario_id, canal="whatsapp")
+            await cleanup_inactive_agents()  # Limpiar agentes inactivos
             return {"status": "success", "message": "Intervención humana activada"}
         
         # Verificar si está en modo humano antes de procesar con el agente
         is_human_mode = await is_in_human_mode(session, usuario_id)
         if is_human_mode:
             # Si está en modo humano, solo guardamos el mensaje del usuario y no enviamos respuesta
+            await cleanup_inactive_agents()  # Limpiar agentes inactivos
             return {"status": "success", "message": "Message saved in human mode"}
         
         # Solo procesar con el agente si NO está en modo humano
@@ -217,9 +257,9 @@ async def whatsapp_webhook(
             try:
                 # Si hay una imagen, procesar con el agente incluyendo la URL
                 if MediaUrl0:
-                    full_response = await ai_agent.process_message(mensaje_a_guardar, media_url=MediaUrl0)
+                    full_response = await agent.process_message(mensaje_a_guardar, media_url=MediaUrl0)
                 else:
-                    full_response = await ai_agent.process_message(mensaje_a_guardar)
+                    full_response = await agent.process_message(mensaje_a_guardar)
                 logger.info(f"Respuesta completa del agente: {full_response}")
                 
                 # Separar el mensaje para el usuario del JSON técnico
@@ -250,7 +290,7 @@ async def whatsapp_webhook(
                     # Actualizar datos del usuario
                     if await update_user_data(f"#USER_DATA:{user_data}", session, From):
                         # Recargar los datos del usuario en el agente
-                        await ai_agent.initialize_user_data(session, From.replace("whatsapp:", ""), "whatsapp")
+                        await agent.initialize_user_data(session, From.replace("whatsapp:", ""), "whatsapp")
                 
                 # Contar tokens de la respuesta
                 output_tokens = max(1, len(user_message) // 4)
@@ -278,6 +318,7 @@ async def whatsapp_webhook(
                 except Exception as e:
                     logger.error(f"Error enviando mensaje por WhatsApp: {str(e)}")
                 
+                await cleanup_inactive_agents()  # Limpiar agentes inactivos
                 return {
                     "status": "success", 
                     "response": user_message,
@@ -307,6 +348,7 @@ async def whatsapp_webhook(
                     body=error_message,
                     to=From
                 )
+                await cleanup_inactive_agents()  # Limpiar agentes inactivos
                 return {"status": "error", "message": str(e)}
     
     except Exception as e:
@@ -320,9 +362,11 @@ async def health_check():
     """
     return {
         "status": "healthy",
-        "agent": "initialized" if ai_agent else "not_initialized",
+        "menu_data": "initialized" if menu_data else "not_initialized",
+        "locales_data": "initialized" if locales_data else "not_initialized",
         "database_url": os.getenv("DATABASE_URL", "not_set"),
-        "twilio_sandbox": SANDBOX_NUMBER
+        "twilio_sandbox": SANDBOX_NUMBER,
+        "active_agents": len(user_agents)
     }
 
 if __name__ == "__main__":
