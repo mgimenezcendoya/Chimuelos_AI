@@ -17,8 +17,7 @@ load_dotenv()
 class TestAIAgent:
     def __init__(self, menu_data=None, locales_data=None):
         self.client = AsyncOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            project=os.getenv("OPENAI_PROJECT_ID")
+            api_key=os.getenv("OPENAI_API_KEY")
         )
         self.conversation_history = []
         self.menu_data = menu_data if menu_data else {}
