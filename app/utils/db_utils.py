@@ -576,4 +576,43 @@ async def end_human_intervention(session: AsyncSession, usuario_id: int, canal: 
     except Exception as e:
         logger.error(f"Error finalizando intervención humana: {str(e)}")
         await session.rollback()
-        return False 
+        return False
+
+async def get_user_session_message_count(session: AsyncSession, usuario_id: int):
+    """Devuelve (count, sesion_id) de mensajes de usuario en la sesión activa actual (última sesión < 12hs)"""
+    # Buscar la última sesión activa
+    last_msg_query = sql_text("""
+        SELECT sesion_id, timestamp
+        FROM hatsu.mensajes
+        WHERE usuario_id = :usuario_id
+          AND rol = 'usuario'
+        ORDER BY timestamp DESC
+        LIMIT 1
+    """)
+    result = await session.execute(last_msg_query, {"usuario_id": usuario_id})
+    row = result.first()
+    sesion_id = None
+    if row and row[1]:
+        last_timestamp = row[1]
+        # Si viene como string, parsear a datetime
+        if isinstance(last_timestamp, str):
+            last_timestamp = parser.parse(last_timestamp)
+        # Si es naive, asumir UTC
+        if last_timestamp.tzinfo is None:
+            last_timestamp = last_timestamp.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        # Si la última sesión es menor a 12hs, usar ese sesion_id
+        if (now - last_timestamp).total_seconds() < 12 * 3600 and row[0]:
+            sesion_id = row[0]
+    if not sesion_id:
+        return 0, None
+    # Contar mensajes de usuario en esa sesión
+    count_query = sql_text("""
+        SELECT COUNT(*) FROM hatsu.mensajes
+        WHERE usuario_id = :usuario_id
+          AND rol = 'usuario'
+          AND sesion_id = :sesion_id
+    """)
+    result = await session.execute(count_query, {"usuario_id": usuario_id, "sesion_id": sesion_id})
+    count = result.scalar_one()
+    return count, sesion_id 
