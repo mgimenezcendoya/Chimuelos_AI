@@ -4,6 +4,9 @@ import json
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text as sql_text
 from decimal import Decimal
+import uuid
+from datetime import datetime, timezone, timedelta
+from dateutil import parser
 
 # Configurar logging
 logging.basicConfig(
@@ -404,17 +407,47 @@ async def save_message(
         # verificar si estamos en modo humano
         if not intervencion_humana:
             intervencion_humana = await is_in_human_mode(session, usuario_id)
-        
+
+        # --- Lógica de sesión ---
+        # Buscar el último mensaje del usuario (rol='usuario')
+        last_msg_query = sql_text("""
+            SELECT sesion_id, timestamp
+            FROM hatsu.mensajes
+            WHERE usuario_id = :usuario_id
+              AND rol = 'usuario'
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """)
+        result = await session.execute(last_msg_query, {"usuario_id": usuario_id})
+        row = result.first()
+        now = None
+        sesion_id = None
+        if row and row[1]:
+            last_timestamp = row[1]
+            # Si viene como string, parsear a datetime
+            if isinstance(last_timestamp, str):
+                last_timestamp = parser.parse(last_timestamp)
+            # Si es naive, asumir UTC
+            if last_timestamp.tzinfo is None:
+                last_timestamp = last_timestamp.replace(tzinfo=timezone.utc)
+            now = datetime.now(timezone.utc)
+            # Si el último mensaje fue hace menos de 12 horas, reutilizar el sesion_id
+            if (now - last_timestamp).total_seconds() < 12 * 3600 and row[0]:
+                sesion_id = row[0]
+        if not sesion_id:
+            sesion_id = str(uuid.uuid4())
+        # --- Fin lógica de sesión ---
+
         # Guardar el mensaje
         query = sql_text("""
             INSERT INTO hatsu.mensajes (
                 usuario_id, orden_id, rol, mensaje, timestamp, 
                 canal, intervencion_humana, intervencion_humana_historial, leido,
-                media_url, tokens
+                media_url, tokens, sesion_id
             ) VALUES (
                 :usuario_id, :orden_id, :rol, :mensaje, CURRENT_TIMESTAMP,
                 :canal, :intervencion_humana, :intervencion_humana, false,
-                :media_url, :tokens
+                :media_url, :tokens, :sesion_id
             )
             RETURNING id
         """)
@@ -429,7 +462,8 @@ async def save_message(
                 "canal": canal,
                 "intervencion_humana": intervencion_humana,
                 "media_url": media_url,
-                "tokens": tokens
+                "tokens": tokens,
+                "sesion_id": sesion_id
             }
         )
         
