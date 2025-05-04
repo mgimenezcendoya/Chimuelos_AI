@@ -17,7 +17,8 @@ from sqlalchemy.sql import text as sql_text
 from app.utils.db_utils import (
     get_menu_from_db, get_locales_from_db, process_order,
     update_user_data, get_user_data, _format_order_confirmation,
-    save_message, mark_conversation_for_human, is_in_human_mode
+    save_message, mark_conversation_for_human, is_in_human_mode,
+    get_user_session_message_count
 )
 
 # Configurar logging
@@ -127,6 +128,23 @@ async def chat_loop(agent: TestAIAgent):
                     tokens=prompt_tokens
                 )
                 await session.commit()
+                
+                # Limitar mensajes por sesión (después de guardar el mensaje)
+                count, _ = await get_user_session_message_count(session, usuario_id)
+                if count > 1000:
+                    limite_msg = "Has excedido el límite de mensajes para esta sesión. Por favor, espera o inicia una nueva sesión más tarde."
+                    output_tokens = max(1, len(limite_msg) // 4)
+                    await save_message(
+                        session=session,
+                        usuario_id=usuario_id,
+                        mensaje=limite_msg,
+                        rol="agente",
+                        canal="console",
+                        tokens=output_tokens
+                    )
+                    await session.commit()
+                    print("\nBot:", limite_msg)
+                    continue
                 
                 if is_human_request:
                     # Activar intervención humana y mostrar mensaje de transición

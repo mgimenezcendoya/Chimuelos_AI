@@ -23,7 +23,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.utils.db_utils import (
     get_menu_from_db, get_locales_from_db, process_order,
     update_user_data, get_user_data, _format_order_confirmation,
-    save_message, mark_conversation_for_human, is_in_human_mode
+    save_message, mark_conversation_for_human, is_in_human_mode,
+    get_user_session_message_count
 )
 
 # Configurar logging
@@ -235,6 +236,33 @@ async def whatsapp_webhook(
             tokens=prompt_tokens
         )
         await session.commit()
+        
+        # Limitar mensajes por sesión (después de guardar el mensaje)
+        count, _ = await get_user_session_message_count(session, usuario_id)
+        if count > 40:
+            limite_msg = "Has excedido el límite de mensajes para esta sesión. Por favor, espera o inicia una nueva sesión más tarde."
+            output_tokens = max(1, len(limite_msg) // 4)
+            await save_message(
+                session=session,
+                usuario_id=usuario_id,
+                mensaje=limite_msg,
+                rol="agente",
+                canal="whatsapp",
+                media_url=None,
+                tokens=output_tokens
+            )
+            await session.commit()
+            try:
+                message = twilio_client.messages.create(
+                    from_=SANDBOX_NUMBER,
+                    body=limite_msg,
+                    to=From
+                )
+                logger.info(f"Mensaje de límite enviado con SID: {message.sid}")
+            except Exception as e:
+                logger.error(f"Error enviando mensaje de límite: {str(e)}")
+            await cleanup_inactive_agents()
+            return {"status": "success", "message": limite_msg}
         
         # Log para verificar que el mensaje se guardó correctamente
         logger.info(f"Mensaje guardado con ID: {mensaje_id}, media_url: {MediaUrl0}")
