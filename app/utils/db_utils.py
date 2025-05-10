@@ -8,6 +8,9 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from dateutil import parser
 
+# Get schema name from environment variable
+SCHEMA_NAME = os.getenv("SCHEMA_NAME", "hatsu")
+
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
@@ -20,9 +23,9 @@ async def get_menu_from_db(session: AsyncSession):
     try:
         # Consultar todos los productos activos
         logger.info("Consultando productos activos...")
-        query = sql_text("""
+        query = sql_text(f"""
             SELECT nombre, descripcion, precio_base, es_combo
-            FROM hatsu.productos
+            FROM {SCHEMA_NAME}.productos
             WHERE activo = true
             ORDER BY es_combo, nombre
         """)
@@ -73,9 +76,9 @@ async def get_menu_from_db(session: AsyncSession):
 async def get_locales_from_db(session: AsyncSession):
     """Obtiene los locales desde la base de datos"""
     try:
-        query = sql_text("""
+        query = sql_text(f"""
             SELECT nombre, direccion, telefono
-            FROM hatsu.locales
+            FROM {SCHEMA_NAME}.locales
             WHERE activo = true
             ORDER BY nombre
         """)
@@ -150,17 +153,17 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
             order_data = json.loads(order_json)
             
             # Obtener o crear usuario
-            user_query = sql_text("""
+            user_query = sql_text(f"""
                 WITH new_user AS (
-                    INSERT INTO hatsu.usuarios (telefono, origen, fecha_registro)
+                    INSERT INTO {SCHEMA_NAME}.usuarios (telefono, origen, fecha_registro)
                     SELECT :phone, :origen, CURRENT_TIMESTAMP
                     WHERE NOT EXISTS (
-                        SELECT 1 FROM hatsu.usuarios 
+                        SELECT 1 FROM {SCHEMA_NAME}.usuarios 
                         WHERE telefono = :phone AND origen = :origen
                     )
                     RETURNING id, true as is_new
                 )
-                SELECT id, false as is_new FROM hatsu.usuarios 
+                SELECT id, false as is_new FROM {SCHEMA_NAME}.usuarios 
                 WHERE telefono = :phone AND origen = :origen
                 UNION ALL
                 SELECT id, is_new FROM new_user
@@ -181,8 +184,8 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
             # Obtener nombre del usuario si existe
             user_name = None
             if not is_new_user:
-                user_data_query = sql_text("""
-                    SELECT nombre FROM hatsu.usuarios WHERE id = :usuario_id
+                user_data_query = sql_text(f"""
+                    SELECT nombre FROM {SCHEMA_NAME}.usuarios WHERE id = :usuario_id
                 """)
                 result = await session.execute(user_data_query, {"usuario_id": usuario_id})
                 user_data = result.fetchone()
@@ -190,8 +193,8 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
                     user_name = user_data[0]
             
             # Crear la orden
-            order_query = sql_text("""
-                INSERT INTO hatsu.ordenes (
+            order_query = sql_text(f"""
+                INSERT INTO {SCHEMA_NAME}.ordenes (
                     usuario_id,
                     local_id,
                     fecha_hora,
@@ -204,7 +207,7 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
                     direccion
                 ) VALUES (
                     :usuario_id,
-                    (SELECT id FROM hatsu.locales WHERE nombre = 'Vicente Lopez' LIMIT 1),
+                    (SELECT id FROM {SCHEMA_NAME}.locales WHERE nombre = 'Vicente Lopez' LIMIT 1),
                     CURRENT_TIMESTAMP,
                     'pendiente',
                     :monto_total,
@@ -232,8 +235,8 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
             
             # Guardar los items de la orden
             for item in order_data.get("items", []):
-                item_query = sql_text("""
-                    INSERT INTO hatsu.orden_detalle (
+                item_query = sql_text(f"""
+                    INSERT INTO {SCHEMA_NAME}.orden_detalle (
                         orden_id,
                         producto_id,
                         cantidad,
@@ -241,7 +244,7 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
                         subtotal
                     ) VALUES (
                         :orden_id,
-                        (SELECT id FROM hatsu.productos WHERE nombre = :producto_nombre LIMIT 1),
+                        (SELECT id FROM {SCHEMA_NAME}.productos WHERE nombre = :producto_nombre LIMIT 1),
                         :cantidad,
                         :precio_unitario,
                         :subtotal
@@ -283,8 +286,8 @@ async def update_user_data(text: str, session: AsyncSession, phone: str, origen:
             # Limpiar el número de teléfono si viene de WhatsApp
             clean_phone = phone.replace("whatsapp:", "")
             
-            update_query = sql_text("""
-                UPDATE hatsu.usuarios
+            update_query = sql_text(f"""
+                UPDATE {SCHEMA_NAME}.usuarios
                 SET nombre = :nombre,
                     email = :email
                 WHERE telefono = :phone AND origen = :origen
@@ -315,17 +318,16 @@ async def get_user_data(session: AsyncSession, phone: str, origen: str = "whatsa
         # Limpiar el número de teléfono si viene de WhatsApp
         clean_phone = phone.replace("whatsapp:", "")
         
-        query = sql_text("""
+        query = sql_text(f"""
             WITH user_data AS (
                 SELECT u.id, u.nombre, u.email
-                FROM hatsu.usuarios u
+                FROM {SCHEMA_NAME}.usuarios u
                 WHERE u.telefono = :phone 
-                AND u.origen = :origen 
-                AND u.nombre IS NOT NULL
+                AND u.origen = :origen
             ),
             last_order AS (
                 SELECT o.direccion
-                FROM hatsu.ordenes o
+                FROM {SCHEMA_NAME}.ordenes o
                 JOIN user_data u ON o.usuario_id = u.id
                 WHERE o.direccion IS NOT NULL
                 ORDER BY o.fecha_hora DESC
@@ -363,10 +365,10 @@ async def is_in_human_mode(session: AsyncSession, usuario_id: int) -> bool:
     """
     try:
         # Simplemente verificar si hay un mensaje con intervención humana en las últimas 2 horas
-        query = sql_text("""
+        query = sql_text(f"""
             SELECT EXISTS (
                 SELECT 1
-                FROM hatsu.mensajes
+                FROM {SCHEMA_NAME}.mensajes
                 WHERE usuario_id = :usuario_id
                 AND intervencion_humana = true
                 AND timestamp > NOW() - INTERVAL '2 hours'
@@ -415,9 +417,9 @@ async def save_message(
 
         # --- Lógica de sesión ---
         # Buscar el último mensaje del usuario (rol='usuario')
-        last_msg_query = sql_text("""
+        last_msg_query = sql_text(f"""
             SELECT sesion_id, timestamp
-            FROM hatsu.mensajes
+            FROM {SCHEMA_NAME}.mensajes
             WHERE usuario_id = :usuario_id
               AND rol = 'usuario'
             ORDER BY timestamp DESC
@@ -444,8 +446,8 @@ async def save_message(
         # --- Fin lógica de sesión ---
 
         # Guardar el mensaje
-        query = sql_text("""
-            INSERT INTO hatsu.mensajes (
+        query = sql_text(f"""
+            INSERT INTO {SCHEMA_NAME}.mensajes (
                 usuario_id, orden_id, rol, mensaje, timestamp, 
                 canal, intervencion_humana, intervencion_humana_historial, leido,
                 media_url, tokens, sesion_id
@@ -492,9 +494,9 @@ async def mark_conversation_for_human(session: AsyncSession, usuario_id: int, ca
     """
     try:
         # Obtener información del usuario
-        user_query = sql_text("""
+        user_query = sql_text(f"""
             SELECT telefono, nombre, direccion 
-            FROM hatsu.usuarios 
+            FROM {SCHEMA_NAME}.usuarios 
             WHERE id = :usuario_id
         """)
         result = await session.execute(user_query, {"usuario_id": usuario_id})
@@ -586,9 +588,9 @@ async def end_human_intervention(session: AsyncSession, usuario_id: int, canal: 
 async def get_user_session_message_count(session: AsyncSession, usuario_id: int):
     """Devuelve (count, sesion_id) de mensajes de usuario en la sesión activa actual (última sesión < 12hs)"""
     # Buscar la última sesión activa
-    last_msg_query = sql_text("""
+    last_msg_query = sql_text(f"""
         SELECT sesion_id, timestamp
-        FROM hatsu.mensajes
+        FROM {SCHEMA_NAME}.mensajes
         WHERE usuario_id = :usuario_id
           AND rol = 'usuario'
         ORDER BY timestamp DESC
@@ -612,8 +614,8 @@ async def get_user_session_message_count(session: AsyncSession, usuario_id: int)
     if not sesion_id:
         return 0, None
     # Contar mensajes de usuario en esa sesión
-    count_query = sql_text("""
-        SELECT COUNT(*) FROM hatsu.mensajes
+    count_query = sql_text(f"""
+        SELECT COUNT(*) FROM {SCHEMA_NAME}.mensajes
         WHERE usuario_id = :usuario_id
           AND rol = 'usuario'
           AND sesion_id = :sesion_id

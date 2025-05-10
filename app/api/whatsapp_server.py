@@ -17,6 +17,12 @@ import time
 root_dir = Path(__file__).parent.parent.parent
 sys.path.append(str(root_dir))
 
+# Cargar variables de entorno
+load_dotenv()
+
+# Get schema name from environment variable
+SCHEMA_NAME = os.getenv("SCHEMA_NAME", "hatsu")
+
 from app.services.test_agent import TestAIAgent
 from app.database.database import async_session, init_db
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,8 +37,7 @@ from app.utils.db_utils import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Cargar variables de entorno
-load_dotenv()
+
 logger.info("Variables de entorno cargadas")
 
 # Configuración de Twilio
@@ -138,19 +143,19 @@ async def whatsapp_webhook(
         
         # Obtener o crear usuario
         phone_number = From.replace("whatsapp:", "")  # Extraer solo el número
-        user_query = sql_text("""
+        user_query = sql_text(f"""
             WITH new_user AS (
-                INSERT INTO hatsu.usuarios (telefono, origen, fecha_registro)
+                INSERT INTO {SCHEMA_NAME}.usuarios (telefono, origen, fecha_registro)
                 SELECT :phone, :origen, CURRENT_TIMESTAMP
                 WHERE NOT EXISTS (
-                    SELECT 1 FROM hatsu.usuarios 
+                    SELECT 1 FROM {SCHEMA_NAME}.usuarios 
                     WHERE telefono = :phone AND origen = :origen
                 )
                 RETURNING id
             )
             SELECT id FROM new_user
             UNION ALL
-            SELECT id FROM hatsu.usuarios 
+            SELECT id FROM {SCHEMA_NAME}.usuarios 
             WHERE telefono = :phone AND origen = :origen
             LIMIT 1
         """)
