@@ -33,6 +33,18 @@ class Producto(Base):
     es_combo = Column(Boolean, default=False)
     activo = Column(Boolean, default=True)
 
+class Usuario(Base):
+    __tablename__ = "usuarios"
+    __table_args__ = {"schema": "hatsu"}
+
+    id = Column(UUID, primary_key=True, default=uuid4)
+    nombre = Column(Text)
+    telefono = Column(Text)
+    email = Column(Text)
+    fecha_registro = Column(DateTime)
+    local_id = Column(UUID, ForeignKey("hatsu.locales.id"))
+    origen = Column(Text)
+
 class Orden(Base):
     __tablename__ = "ordenes"
     __table_args__ = {"schema": "hatsu"}
@@ -44,6 +56,12 @@ class Orden(Base):
     estado = Column(Text)
     monto_total = Column(Numeric)
     medio_pago = Column(Text)
+    is_takeaway = Column(Boolean)
+    fecha_procesada = Column(DateTime)
+    fecha_entregada = Column(DateTime)
+    origen = Column(Text)
+    observaciones = Column(Text)
+    direccion = Column(Text, nullable=True)  # Asegurarnos de que la columna sea nullable
 
 class OrdenDetalle(Base):
     __tablename__ = "orden_detalle"

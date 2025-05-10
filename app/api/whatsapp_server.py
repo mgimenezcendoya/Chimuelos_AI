@@ -137,6 +137,7 @@ async def whatsapp_webhook(
             return {"status": "ignored", "message": "Not a WhatsApp message"}
         
         # Obtener o crear usuario
+        phone_number = From.replace("whatsapp:", "")  # Extraer solo el número
         user_query = sql_text("""
             WITH new_user AS (
                 INSERT INTO hatsu.usuarios (telefono, origen, fecha_registro)
@@ -156,7 +157,7 @@ async def whatsapp_webhook(
         result = await session.execute(
             user_query,
             {
-                "phone": From.replace("whatsapp:", ""),
+                "phone": phone_number,
                 "origen": "whatsapp"
             }
         )
@@ -239,7 +240,7 @@ async def whatsapp_webhook(
         
         # Limitar mensajes por sesión (después de guardar el mensaje)
         count, _ = await get_user_session_message_count(session, usuario_id)
-        if count > 40:
+        if count > 100:
             limite_msg = "Has excedido el límite de mensajes para esta sesión. Por favor, espera o inicia una nueva sesión más tarde."
             output_tokens = max(1, len(limite_msg) // 4)
             await save_message(
@@ -270,8 +271,35 @@ async def whatsapp_webhook(
         if is_human_request:
             # Activar intervención humana y retornar el mensaje de transición
             await mark_conversation_for_human(session, usuario_id, canal="whatsapp")
+            human_msg = "Perfecto, en breve una persona de nuestro local continúa esta conversación."
+            
+            # Contar tokens del mensaje de transición
+            human_tokens = max(1, len(human_msg) // 4)
+            
+            # Guardar mensaje de transición
+            await save_message(
+                session=session,
+                usuario_id=usuario_id,
+                mensaje=human_msg,
+                rol="agente",
+                canal="whatsapp",
+                intervencion_humana=True,
+                tokens=human_tokens
+            )
+            await session.commit()
+            
+            try:
+                message = twilio_client.messages.create(
+                    from_=SANDBOX_NUMBER,
+                    body=human_msg,
+                    to=From
+                )
+                logger.info(f"Mensaje de transición enviado con SID: {message.sid}")
+            except Exception as e:
+                logger.error(f"Error enviando mensaje de transición: {str(e)}")
+            
             await cleanup_inactive_agents()  # Limpiar agentes inactivos
-            return {"status": "success", "message": "Intervención humana activada"}
+            return {"status": "success", "message": human_msg}
         
         # Verificar si está en modo humano antes de procesar con el agente
         is_human_mode = await is_in_human_mode(session, usuario_id)
@@ -296,13 +324,23 @@ async def whatsapp_webhook(
                     parts = full_response.split("#ORDER:")
                     user_message = parts[0].strip()
                     order_json = parts[1].strip()
-                    # Limpiar el JSON para asegurar que no haya texto adicional
                     if "}" in order_json:
                         order_json = order_json[:order_json.rindex("}") + 1]
-                    # Procesar la orden
+                    
+                    # Parsear el JSON de la orden para asegurar que tiene todos los campos requeridos
+                    order_data = json.loads(order_json)
+                    
+                    # Registrar el procesamiento de la orden
                     logger.info(f"Procesando orden de WhatsApp para {From}")
-                    order_success, is_new_user, confirmation_message = await process_order(f"#ORDER:{order_json}", session, From)
-                    if order_success:
+                    
+                    # Procesar la orden
+                    success, is_new_user, confirmation_message = await process_order(
+                        text=f"#ORDER:{order_json}",
+                        session=session,
+                        phone=From.replace("whatsapp:", ""),
+                        origen="whatsapp"
+                    )
+                    if success:
                         user_message = confirmation_message
                     else:
                         user_message += "\n\nLo siento, hubo un problema al procesar tu orden. Por favor, intenta nuevamente."

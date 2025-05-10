@@ -100,7 +100,7 @@ async def get_locales_from_db(session: AsyncSession):
         logger.error(f"Error obteniendo locales de la base de datos: {str(e)}")
         return None
 
-def _format_order_confirmation(order_data: dict, user_address: str = None) -> str:
+def _format_order_confirmation(order_data: dict) -> str:
     """Formatea el mensaje de confirmación de orden con emojis y detalles"""
     items = []
     total = 0
@@ -131,8 +131,8 @@ def _format_order_confirmation(order_data: dict, user_address: str = None) -> st
     message.append(f"\n🚗 Modo de entrega: {delivery_mode}")
     
     # Agregar dirección si es delivery
-    if not order_data.get("is_takeaway", False) and user_address:
-        message.append(f"\n🏠 Dirección de entrega: {user_address}")
+    if not order_data.get("is_takeaway", False) and order_data.get("direccion"):
+        message.append(f"\n🏠 Dirección de entrega: {order_data['direccion']}")
     
     # Agregar medio de pago
     payment_method = order_data.get("medio_pago", "pendiente")
@@ -178,109 +178,98 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
             usuario_id = row[0]
             is_new_user = row[1]
             
-            # Obtener nombre y dirección del usuario si existe
-            user_address = None
+            # Obtener nombre del usuario si existe
+            user_name = None
             if not is_new_user:
                 user_data_query = sql_text("""
-                    SELECT nombre, direccion FROM hatsu.usuarios WHERE id = :usuario_id
+                    SELECT nombre FROM hatsu.usuarios WHERE id = :usuario_id
                 """)
                 result = await session.execute(user_data_query, {"usuario_id": usuario_id})
                 user_data = result.fetchone()
                 if user_data:
-                    user_address = user_data[1]
+                    user_name = user_data[0]
             
-            # Obtener el local de Vicente Lopez
-            local_query = sql_text("""
-                SELECT id FROM hatsu.locales 
-                WHERE nombre = 'Vicente Lopez'
-                AND activo = true 
-                LIMIT 1
-            """)
-            result = await session.execute(local_query)
-            local_id = result.scalar_one()
-            
-            if not local_id:
-                logger.error("Local de Vicente Lopez no encontrado o no activo")
-                return False, False, None
-            
-            # Insertar la orden
+            # Crear la orden
             order_query = sql_text("""
                 INSERT INTO hatsu.ordenes (
-                    usuario_id, local_id, fecha_hora, estado, monto_total, 
-                    medio_pago, is_takeaway, origen, observaciones
+                    usuario_id,
+                    local_id,
+                    fecha_hora,
+                    estado,
+                    monto_total,
+                    medio_pago,
+                    is_takeaway,
+                    origen,
+                    observaciones,
+                    direccion
                 ) VALUES (
-                    :usuario_id, :local_id, CURRENT_TIMESTAMP, 'pendiente', :monto_total, 
-                    :medio_pago, :is_takeaway, :origen, :observaciones
-                )
-                RETURNING id
+                    :usuario_id,
+                    (SELECT id FROM hatsu.locales WHERE nombre = 'Vicente Lopez' LIMIT 1),
+                    CURRENT_TIMESTAMP,
+                    'pendiente',
+                    :monto_total,
+                    :medio_pago,
+                    :is_takeaway,
+                    :origen,
+                    :observaciones,
+                    :direccion
+                ) RETURNING id
             """)
             
-            # Calcular el monto_total sumando los subtotales de los detalles
-            monto_total = 0
-            for item in order_data.get("items", []):
-                subtotal = int(float(str(item["subtotal"])))
-                monto_total += subtotal
-
             result = await session.execute(
                 order_query,
                 {
                     "usuario_id": usuario_id,
-                    "local_id": local_id,
-                    "monto_total": monto_total,
-                    "is_takeaway": order_data.get("is_takeaway", False),
-                    "medio_pago": order_data.get("medio_pago", "pendiente"),
+                    "monto_total": order_data.get("total"),
+                    "medio_pago": order_data.get("medio_pago"),
+                    "is_takeaway": order_data.get("is_takeaway", True),
                     "origen": origen,
-                    "observaciones": order_data.get("observaciones", "")
+                    "observaciones": order_data.get("observaciones"),
+                    "direccion": order_data.get("direccion") if not order_data.get("is_takeaway", True) else None
                 }
             )
             orden_id = result.scalar_one()
-
-            # Insertar los detalles de la orden
+            
+            # Guardar los items de la orden
             for item in order_data.get("items", []):
-                # Buscar el ID del producto por su nombre
-                product_query = sql_text("""
-                    SELECT id FROM hatsu.productos 
-                    WHERE nombre = :nombre AND activo = true
-                    LIMIT 1
-                """)
-                result = await session.execute(product_query, {"nombre": item["product"]})
-                producto_id = result.scalar_one()
-                
-                detail_query = sql_text("""
+                item_query = sql_text("""
                     INSERT INTO hatsu.orden_detalle (
-                        orden_id, producto_id, cantidad, precio_unitario, subtotal
+                        orden_id,
+                        producto_id,
+                        cantidad,
+                        precio_unitario,
+                        subtotal
                     ) VALUES (
-                        :orden_id, :producto_id, :cantidad, :precio_unitario, :subtotal
+                        :orden_id,
+                        (SELECT id FROM hatsu.productos WHERE nombre = :producto_nombre LIMIT 1),
+                        :cantidad,
+                        :precio_unitario,
+                        :subtotal
                     )
                 """)
                 
-                # Usar los valores directamente del item
-                cantidad = int(float(str(item["quantity"])))
-                precio_unitario = int(float(str(item["precio_unitario"])))
-                subtotal = int(float(str(item["subtotal"])))
-                
                 await session.execute(
-                    detail_query,
+                    item_query,
                     {
                         "orden_id": orden_id,
-                        "producto_id": producto_id,
-                        "cantidad": cantidad,
-                        "precio_unitario": precio_unitario,
-                        "subtotal": subtotal
+                        "producto_nombre": item["product"],
+                        "cantidad": item["quantity"],
+                        "precio_unitario": item["precio_unitario"],
+                        "subtotal": item["subtotal"]
                     }
                 )
             
             await session.commit()
-            logger.info(f"Nueva orden {orden_id} guardada para {phone} desde {origen}")
             
-            # Generar mensaje de confirmación formateado
-            confirmation_message = _format_order_confirmation(order_data, user_address)
+            # Formatear mensaje de confirmación
+            confirmation_message = _format_order_confirmation(order_data)
+            
             return True, is_new_user, confirmation_message
             
     except Exception as e:
         logger.error(f"Error procesando orden: {str(e)}")
         await session.rollback()
-        return False, False, None
+        return False, False, str(e)
 
 async def update_user_data(text: str, session: AsyncSession, phone: str, origen: str = "whatsapp"):
     """Actualiza los datos del usuario"""
@@ -297,8 +286,7 @@ async def update_user_data(text: str, session: AsyncSession, phone: str, origen:
             update_query = sql_text("""
                 UPDATE hatsu.usuarios
                 SET nombre = :nombre,
-                    email = :email,
-                    direccion = :direccion
+                    email = :email
                 WHERE telefono = :phone AND origen = :origen
                 RETURNING id
             """)
@@ -308,7 +296,6 @@ async def update_user_data(text: str, session: AsyncSession, phone: str, origen:
                 {
                     "nombre": user_data.get("nombre"),
                     "email": user_data.get("email"),
-                    "direccion": user_data.get("direccion"),
                     "phone": clean_phone,
                     "origen": origen
                 }
@@ -323,23 +310,41 @@ async def update_user_data(text: str, session: AsyncSession, phone: str, origen:
         return False
 
 async def get_user_data(session: AsyncSession, phone: str, origen: str = "whatsapp"):
-    """Obtiene los datos del usuario si existe"""
+    """Obtiene los datos del usuario y la dirección de su último pedido"""
     try:
         # Limpiar el número de teléfono si viene de WhatsApp
         clean_phone = phone.replace("whatsapp:", "")
         
         query = sql_text("""
-            SELECT nombre, direccion FROM hatsu.usuarios
-            WHERE telefono = :phone 
-            AND origen = :origen 
-            AND (nombre IS NOT NULL OR direccion IS NOT NULL)
+            WITH user_data AS (
+                SELECT u.id, u.nombre, u.email
+                FROM hatsu.usuarios u
+                WHERE u.telefono = :phone 
+                AND u.origen = :origen 
+                AND u.nombre IS NOT NULL
+            ),
+            last_order AS (
+                SELECT o.direccion
+                FROM hatsu.ordenes o
+                JOIN user_data u ON o.usuario_id = u.id
+                WHERE o.direccion IS NOT NULL
+                ORDER BY o.fecha_hora DESC
+                LIMIT 1
+            )
+            SELECT 
+                u.nombre,
+                u.email,
+                lo.direccion
+            FROM user_data u
+            LEFT JOIN last_order lo ON true
         """)
         result = await session.execute(query, {"phone": clean_phone, "origen": origen})
         row = result.first()
         if row:
             return {
                 "nombre": row[0],
-                "direccion": row[1]
+                "email": row[1],
+                "direccion": row[2]  # Dirección del último pedido
             }
         return None
     except Exception as e:

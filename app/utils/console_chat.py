@@ -149,7 +149,7 @@ async def chat_loop(agent: TestAIAgent):
                 if is_human_request:
                     # Activar intervención humana y mostrar mensaje de transición
                     await mark_conversation_for_human(session, usuario_id, canal="console")
-                    human_msg = "Tu mensaje ha sido recibido y será atendido por un operador humano pronto."
+                    human_msg = "Perfecto, en breve una persona de nuestro local continúa esta conversación."
                     print("\nBot:", human_msg)
                     
                     # Contar tokens del mensaje de transición
@@ -183,13 +183,21 @@ async def chat_loop(agent: TestAIAgent):
                     if "#ORDER:" in full_response:
                         parts = full_response.split("#ORDER:")
                         user_message = parts[0].strip()
-                        # Extract the order JSON and clean it up
+                        # Extraer el JSON de la orden y limpiarlo
                         order_json = parts[1].strip()
-                        # Remove any trailing text after the JSON object
                         if "}" in order_json:
                             order_json = order_json[:order_json.rindex("}") + 1]
+                        
+                        # Parsear el JSON de la orden para asegurar que tiene todos los campos requeridos
+                        order_data = json.loads(order_json)
+                        
                         # Procesar la orden solo si viene de la consola
-                        success, is_new_user, confirmation_message = await process_order(f"#ORDER:{order_json}", session, "console", origen="console")
+                        success, is_new_user, confirmation_message = await process_order(
+                            text=f"#ORDER:{order_json}",
+                            session=session,
+                            phone="console",
+                            origen="console"
+                        )
                         if success:
                             user_message = confirmation_message
                         else:
