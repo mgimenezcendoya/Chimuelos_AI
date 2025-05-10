@@ -5,6 +5,11 @@ import json
 from datetime import datetime
 import sys
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Cargar variables de entorno
+load_dotenv()
+SCHEMA_NAME = os.getenv("SCHEMA_NAME", "hatsu")
 
 # Agregar el directorio raíz al path para poder importar desde app
 root_dir = Path(__file__).parent.parent.parent
@@ -53,19 +58,19 @@ async def chat_loop(agent: TestAIAgent):
     
     async with async_session() as session:
         # Obtener o crear usuario
-        user_query = sql_text("""
+        user_query = sql_text(f"""
             WITH new_user AS (
-                INSERT INTO hatsu.usuarios (telefono, origen, fecha_registro)
+                INSERT INTO {SCHEMA_NAME}.usuarios (telefono, origen, fecha_registro)
                 SELECT :phone, :origen, CURRENT_TIMESTAMP
                 WHERE NOT EXISTS (
-                    SELECT 1 FROM hatsu.usuarios 
+                    SELECT 1 FROM {SCHEMA_NAME}.usuarios 
                     WHERE telefono = :phone AND origen = :origen
                 )
                 RETURNING id
             )
             SELECT id FROM new_user
             UNION ALL
-            SELECT id FROM hatsu.usuarios 
+            SELECT id FROM {SCHEMA_NAME}.usuarios 
             WHERE telefono = :phone AND origen = :origen
             LIMIT 1
         """)
