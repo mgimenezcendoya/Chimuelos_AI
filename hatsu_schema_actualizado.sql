@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS ordenes (
     fecha_procesada TIMESTAMP,
     fecha_entregada TIMESTAMP,
     origen TEXT,
-    observaciones TEXT
+    observaciones TEXT,
+    direccion TEXT
 );
 
 -- Tabla: orden_detalle

@@ -25,7 +25,7 @@ class TestAIAgent:
         # Atributos para datos del usuario
         self.user_name = None
         self.user_email = None
-        self.user_address = None
+        self.last_order_address = None  # Dirección del último pedido
         self.address_confirmed = False
         self.waiting_for_address_confirmation = False
         self.current_order = None
@@ -90,14 +90,14 @@ class TestAIAgent:
         
         return True, ""
     
-    def set_user_data(self, name=None, email=None, address=None):
+    def set_user_data(self, name=None, email=None, last_order_address=None):
         """Establece los datos del usuario"""
         if name:
             self.user_name = name
         if email:
             self.user_email = email
-        if address:
-            self.user_address = address
+        if last_order_address:
+            self.last_order_address = last_order_address
             # Marcar la dirección como confirmada si se establece desde la base de datos
             self.address_confirmed = True
     
@@ -106,7 +106,7 @@ class TestAIAgent:
         return {
             "name": self.user_name,
             "email": self.user_email,
-            "address": self.user_address
+            "last_order_address": self.last_order_address
         }
     
     def _format_menu_for_prompt(self) -> str:
@@ -247,8 +247,8 @@ class TestAIAgent:
         locales_str = self._format_locales_for_prompt()
         
         # Determinar si el usuario tiene dirección registrada
-        has_registered_address = "true" if self.user_address else "false"
-        registered_address = self.user_address if self.user_address else "ninguna"
+        has_registered_address = "true" if self.last_order_address else "false"
+        registered_address = self.last_order_address if self.last_order_address else "ninguna"
         has_user_name = "true" if self.user_name else "false"
         user_name = self.user_name if self.user_name else "ninguno"
         
@@ -258,8 +258,8 @@ class TestAIAgent:
         Estado actual del usuario:
         - Nombre registrado: {has_user_name}
         - Nombre: {user_name}
-        - Dirección registrada: {has_registered_address}
-        - Dirección: {registered_address}
+        - Existe dirección del último pedido: {has_registered_address}
+        - Dirección del último pedido: {registered_address}
         
         CRÍTICO - Flujo de Saludo:
         1. Si es la primera interacción del chat:
@@ -330,11 +330,17 @@ class TestAIAgent:
                - Si elige retirarlo:
                  * Incluye el formato #ORDER con is_takeaway:true y el medio_pago elegido
                - Si elige envío a domicilio:
-                 * Si tiene dirección registrada ({registered_address}), confirmar
-                 * Si no tiene dirección, solicitar datos
-                 * Incluye el formato #ORDER con is_takeaway:false y el medio_pago elegido
-            c. IMPORTANTE: Las observaciones del cliente SIEMPRE deben guardarse en el campo observaciones del #ORDER
-            d. PROHIBIDO confirmarle el pedido final a un usuario sin generar #ORDER 
+                 * Si tiene dirección del último pedido ({registered_address}), ofrécele enviarlo a esa dirección
+                 * Si no tiene dirección, simplemente pregunta: "¿Cuál es la dirección de entrega?"
+                 * IMPORTANTE: Cuando el cliente proporcione la dirección, DEBES incluirla en el campo "direccion" del #ORDER
+                 * El formato #ORDER DEBE incluir:
+                   - is_takeaway:false
+                   - medio_pago: el método elegido
+                   - direccion: la dirección proporcionada por el cliente
+               c. IMPORTANTE: Las observaciones del cliente SIEMPRE deben guardarse en el campo observaciones del #ORDER
+               d. PROHIBIDO confirmarle el pedido final a un usuario sin generar #ORDER 
+               e. CRÍTICO: Si es una orden de delivery (is_takeaway:false), el campo "direccion" es OBLIGATORIO en el #ORDER
+
         CRÍTICO - Al preguntar por requerimientos especiales:
             - SIEMPRE usa EXACTAMENTE la frase: "¿Tienes algún requerimiento especial para tu pedido?"
             - NUNCA agregues ejemplos ni sugerencias
@@ -342,27 +348,6 @@ class TestAIAgent:
             - NUNCA agregues texto adicional antes o después de la pregunta
             - SIEMPRE pregunta esto DESPUÉS de confirmar el método de pago
             - Las observaciones del cliente se guardarán en el campo observaciones del #ORDER
-
-        IMPORTANTE: NUNCA pidas una nueva dirección si el usuario ya tiene una registrada
-        IMPORTANTE: En el saludo inicial, solo usa el nombre del usuario si está registrado
-        IMPORTANTE: Si el cliente dice "envialo a mi direccion" y tiene dirección registrada, usar esa
-
-        CRÍTICO - Manejo de Cambios de Dirección:
-        Cuando el cliente solicite cambiar la dirección de entrega:
-        1. Confirmarle el cambio al usuario, continuar el flujo del pedido, y OBLIGATORIAMENTE agregar lo siguiente al final del mensaje:
-           "
-           #USER_DATA:{{
-               "nombre": "{user_name}",
-               "email": "{self.user_email}",
-               "direccion": "[nueva dirección]"
-           }}
-           "
-        
-        2. SIEMPRE incluye el formato #USER_DATA para actualizar la dirección
-        3. NO esperes confirmación del usuario, continúa directamente con la pregunta de pago
-        4. NO rechaces el cambio de dirección
-        5. Asegúrate de que la dirección se actualice en el resumen final de la orden
-        6. IMPORTANTE: El formato #USER_DATA debe estar en una línea separada y no debe tener texto después del JSON
 
         Información de Locales:
         {locales_str}
@@ -378,15 +363,15 @@ class TestAIAgent:
                     "subtotal": 1234
                 }}
             ],
-            "is_takeaway": true,
+            "is_takeaway": false,
             "medio_pago": "efectivo/mercadopago",
-            "observaciones": "texto con requerimientos especiales"
+            "observaciones": "texto con requerimientos especiales",
+            "direccion": "dirección de entrega provista por el cliente para este pedido (solo si is_takeaway es false)"
         }}
         - Para derivar a humano: #HUMAN
         - Para guardar datos de usuario: #USER_DATA:{{
             "nombre": "Juan Pérez",
-            "email": "juan@email.com",
-            "direccion": "Av. Maipú 1234"
+            "email": "juan@email.com"
         }}
 
         IMPORTANTE: Al mostrar precios en cualquier mensaje, asegúrate de:
@@ -470,7 +455,7 @@ class TestAIAgent:
                 self.set_user_data(
                     name=user_data.get("nombre"),
                     email=user_data.get("email"),
-                    address=user_data.get("direccion")
+                    last_order_address=user_data.get("direccion")
                 )
                 logger.info(f"Datos del usuario cargados: {user_data}")
                 return True
