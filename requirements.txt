@@ -14,7 +14,6 @@ airtable-python-wrapper==0.15.3
 pytest==8.0.0
 httpx==0.26.0
 python-multipart==0.0.9
-alembic==1.13.1
 redis==5.0.1
 tenacity==8.2.3
 streamlit==1.31.1
