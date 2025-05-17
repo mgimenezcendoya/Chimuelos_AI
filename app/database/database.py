@@ -4,6 +4,7 @@ from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Boo
 import os
 from dotenv import load_dotenv
 from uuid import uuid4
+from tenacity import retry, wait_fixed, stop_after_attempt  # 👈 agregado para reintentos
 
 load_dotenv()
 
@@ -79,13 +80,15 @@ async def get_session() -> AsyncSession:
     async with async_session() as session:
         yield session
 
-# Función para inicializar la base de datos
+# Función para inicializar la base de datos con reintentos
+@retry(wait=wait_fixed(2), stop=stop_after_attempt(10))
 async def init_db():
-    """Inicializa la conexión a la base de datos"""
+    """Inicializa la conexión a la base de datos con reintentos"""
     try:
+        print("⏳ Intentando conectar a la base de datos...")
         async with engine.begin() as conn:
-            # Aquí podrías agregar migraciones o creación de tablas si es necesario
-            pass
+            await conn.run_sync(lambda _: None)  # Solo testea conexión
+        print("✅ Conexión exitosa a la base de datos.")
     except Exception as e:
-        print(f"Error inicializando la base de datos: {str(e)}")
-        raise 
+        print(f"❌ Error al conectar a la base de datos: {str(e)}")
+        raise
