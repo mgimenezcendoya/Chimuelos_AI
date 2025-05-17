@@ -21,4 +21,8 @@ streamlit==1.31.1
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
-google-api-python-client 
+google-api-python-client
+gunicorn==21.2.0
+sentry-sdk==1.40.4
+prometheus-client==0.19.0
+uvicorn[standard]==0.27.1 
