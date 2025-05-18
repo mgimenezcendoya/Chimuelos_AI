@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI
 from typing import Dict, Any
 from pathlib import Path
+import re
+from datetime import datetime, timezone, timedelta
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -66,6 +68,10 @@ class TestAIAgent:
         # Validar que exista el campo observaciones
         if 'observaciones' not in order_data:
             return False, "La orden debe incluir el campo observaciones"
+            
+        # Validar que exista el campo horario_entrega
+        if 'horario_entrega' not in order_data:
+            return False, "La orden debe incluir el campo horario_entrega"
             
         for item in order_data['items']:
             product_name = item.get('product')
@@ -159,6 +165,12 @@ class TestAIAgent:
         
         return "\n".join(locales_text)
     
+    def _get_current_time(self) -> str:
+        """Obtiene la hora actual en UTC-3 (Argentina)"""
+        utc_now = datetime.now(timezone.utc)
+        argentina_time = utc_now - timedelta(hours=3)
+        return argentina_time.strftime("%H:%M")
+    
     async def process_message(self, message: str, media_url: str = None) -> str:
         """
         Procesa un mensaje del usuario y retorna una respuesta.
@@ -176,12 +188,15 @@ class TestAIAgent:
                 logger.info(f"Media URL recibida: {media_url}")
                 return "He recibido tu imagen. Por el momento no puedo procesarla, pero un operador humano la revisará pronto. ¿En qué más puedo ayudarte?"
             
+            # Obtener la hora actual en UTC-3
+            current_time = self._get_current_time()
+            
             # Si no tenemos el nombre del usuario o está vacío, solicitarlo primero
             if not self.user_name or self.user_name.strip() == '':
                 # Si es el primer mensaje, pedir el nombre
                 if not self.conversation_history:
                     # Guardar el mensaje en el historial
-                    self.conversation_history.append({"role": "user", "content": message})
+                    self.conversation_history.append({"role": "user", "content": f"[Hora actual: {current_time}] {message}"})
                     response = "¡Bienvenido a Hatsu Sushi - Vicente Lopez! Para brindarte una mejor atención, ¿podrías decirme tu nombre?"
                     self.conversation_history.append({"role": "assistant", "content": response})
                     return response
@@ -195,7 +210,7 @@ class TestAIAgent:
                 response += "✍️ ¿Qué te gustaría ordenar?"
                 
                 # Guardar el mensaje en el historial
-                self.conversation_history.append({"role": "user", "content": message})
+                self.conversation_history.append({"role": "user", "content": f"[Hora actual: {current_time}] {message}"})
                 self.conversation_history.append({"role": "assistant", "content": response})
                 
                 return response + f"\n\n#USER_DATA:{json.dumps(user_data)}"
@@ -211,8 +226,8 @@ class TestAIAgent:
             # Agregar historial de conversación
             messages.extend(self.conversation_history)
             
-            # Agregar mensaje actual
-            messages.append({"role": "user", "content": message})
+            # Agregar mensaje actual con la hora
+            messages.append({"role": "user", "content": f"[Hora actual: {current_time}] {message}"})
             
             logger.info("Enviando solicitud a OpenAI")
             # Generar respuesta
@@ -257,7 +272,7 @@ class TestAIAgent:
                     response_text = "Lo siento, hubo un error procesando tu orden. Por favor, intenta nuevamente."
             
             # Guardar la conversación
-            self.conversation_history.append({"role": "user", "content": message})
+            self.conversation_history.append({"role": "user", "content": f"[Hora actual: {current_time}] {message}"})
             self.conversation_history.append({"role": "assistant", "content": response_text})
             
             return response_text
@@ -390,7 +405,8 @@ class TestAIAgent:
             "is_takeaway": false,
             "medio_pago": "efectivo/mercadopago",
             "observaciones": "texto con requerimientos especiales",
-            "direccion": "dirección de entrega provista por el cliente para este pedido (solo si is_takeaway es false)"
+            "direccion": "dirección de entrega provista por el cliente para este pedido (solo si is_takeaway es false)",
+            "horario_entrega": "Entrega inmediata"
         }}
         - Para derivar a humano: #HUMAN
         - Para guardar datos de usuario: #USER_DATA:{{
@@ -458,6 +474,61 @@ class TestAIAgent:
             "medio_pago": "mercadopago",
             "observaciones": "sin sal"
         }}
+
+        CRÍTICO - Manejo del horario de entrega:
+        1. El campo horario_entrega SIEMPRE debe estar presente en el #ORDER
+        2. Por defecto, usar "Entrega inmediata"
+        3. NO preguntar al usuario por el horario de entrega como parte del flujo normal
+        4. Solo capturar un horario específico si el usuario lo solicita explícitamente
+        5. EXCEPCIÓN - Si la hora actual es anterior a las 19:00hs:
+           - SIEMPRE preguntar al usuario: "¿Deseas programar el pedido para cierta hora o prefieres entrega inmediata?" si la hora actual es anterior a las 19:00hs
+            - NUNCA usar "Entrega inmediata" como valor por defecto si la hora actual es anterior a las 19:00hs
+           - Si el usuario elige programar el pedido:
+             * Validar que la hora solicitada sea posterior a las 19:00hs
+             * Si el usuario solicita una hora antes de las 19:00hs, informar:
+               "Lo siento, nuestro local realiza entregas a partir de las 19:00hs. ¿Te gustaría programar tu pedido para después de las 19:00hs?"
+        6. Al capturar un horario específico:
+           - Usar formato "HH:MMhs" (ej: "21:00hs")
+           - Si el usuario dice "a las 9" o "nueve", asumir PM (21:00hs)
+           - Si el usuario dice "21" o "21hs", usar "21:00hs"
+        7. Ejemplos de conversión:
+           - "a las 9" -> "21:00hs"
+           - "nueve y media" -> "21:30hs"
+           - "21" -> "21:00hs"
+           - "21hs" -> "21:00hs"
+
+        CRÍTICO - Validación de horarios de entrega:
+        1. Tiempo mínimo de entrega:
+           - El horario de entrega solicitado debe ser al menos 40 minutos después de la hora actual
+           - Si el usuario solicita un horario muy cercano (menos de 40 minutos), informar:
+             "Lo siento, necesitamos al menos 40 minutos para preparar y entregar tu pedido. ¿Te gustaría programarlo para [hora actual + 40 minutos]?"
+           - Ejemplo: Si son las 21:00 y el usuario pide para las 21:15, sugerir las 21:40
+
+        2. Solicitudes de tiempo relativo:
+           - Si el usuario solicita entrega en un tiempo relativo (ej: "en 45 minutos"), calcular:
+             * Tomar la hora actual (que viene en el formato [Hora actual: HH:MM])
+             * Sumar los minutos o horas solicitados
+             * Convertir al formato "HH:MMhs"
+           - Ejemplos:
+             * Si son las 21:00 y pide "en 45 minutos" -> "21:45hs"
+             * Si son las 21:30 y pide "en 1 hora y media" -> "23:00hs"
+             * Si son las 21:45 y pide "en 2 horas" -> "23:45hs"
+
+        3. Validación de horario mínimo:
+           - CRÍTICO: NO se permiten entregas antes de las 19:00hs en ningún caso
+           - Si la hora actual es anterior a las 19:00hs:
+             * Si el usuario elige programar el pedido:
+               - Validar que la hora solicitada sea posterior a las 19:00hs
+               - Si el usuario solicita una hora antes de las 19:00hs, informar:
+                 "Lo siento, nuestro local realiza entregas a partir de las 19:00hs. ¿Te gustaría programar tu pedido para después de las 19:00hs?"
+             * Si el usuario elige entrega inmediata:
+               - Informar: "Lo siento, nuestro local realiza entregas a partir de las 19:00hs. ¿Te gustaría programar tu pedido para después de las 19:00hs?"
+           - Si el usuario programa el pedido para un horario anterior a la hora actual, informarle del error y volver a preguntar por el horario de entrega
+             * Seguir las reglas normales de validación de tiempo mínimo (40 minutos)
+           - Si la hora actual es posterior a las 19:00hs:
+             * Seguir las reglas normales de validación de tiempo mínimo (40 minutos)
+
+        IMPORTANTE: Al mostrar precios en cualquier mensaje
         """
 
     async def initialize_user_data(self, session, phone, origen="whatsapp"):

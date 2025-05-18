@@ -63,6 +63,7 @@ class Orden(Base):
     origen = Column(Text)
     observaciones = Column(Text)
     direccion = Column(Text, nullable=True)  # Asegurarnos de que la columna sea nullable
+    horario_entrega = Column(Text, default='Entrega inmediata')
 
 class OrdenDetalle(Base):
     __tablename__ = "orden_detalle"

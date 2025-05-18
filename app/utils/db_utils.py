@@ -133,6 +133,11 @@ def _format_order_confirmation(order_data: dict) -> str:
     delivery_mode = "Delivery" if not order_data.get("is_takeaway", False) else "Retiro en local"
     message.append(f"\n🚗 Modo de entrega: {delivery_mode}")
     
+    # Agregar horario de entrega solo si es diferente del default
+    horario = order_data.get("horario_entrega", "Entrega inmediata")
+    if horario != "Entrega inmediata":
+        message.append(f"\n⏰ Horario de entrega: {horario}")
+    
     # Agregar dirección si es delivery
     if not order_data.get("is_takeaway", False) and order_data.get("direccion"):
         message.append(f"\n🏠 Dirección de entrega: {order_data['direccion']}")
@@ -204,7 +209,8 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
                     is_takeaway,
                     origen,
                     observaciones,
-                    direccion
+                    direccion,
+                    horario_entrega
                 ) VALUES (
                     :usuario_id,
                     (SELECT id FROM {SCHEMA_NAME}.locales WHERE nombre = 'Vicente Lopez' LIMIT 1),
@@ -215,7 +221,8 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
                     :is_takeaway,
                     :origen,
                     :observaciones,
-                    :direccion
+                    :direccion,
+                    :horario_entrega
                 ) RETURNING id
             """)
             
@@ -228,7 +235,8 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
                     "is_takeaway": order_data.get("is_takeaway", True),
                     "origen": origen,
                     "observaciones": order_data.get("observaciones"),
-                    "direccion": order_data.get("direccion") if not order_data.get("is_takeaway", True) else None
+                    "direccion": order_data.get("direccion") if not order_data.get("is_takeaway", True) else None,
+                    "horario_entrega": order_data.get("horario_entrega", "Entrega inmediata")
                 }
             )
             orden_id = result.scalar_one()
