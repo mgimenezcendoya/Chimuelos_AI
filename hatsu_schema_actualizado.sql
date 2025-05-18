@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS ordenes (
     fecha_entregada TIMESTAMP,
     origen TEXT,
     observaciones TEXT,
-    direccion TEXT
+    direccion TEXT,
+    horario_entrega TEXT
 );
 
 -- Tabla: orden_detalle
