@@ -176,7 +176,31 @@ class TestAIAgent:
                 logger.info(f"Media URL recibida: {media_url}")
                 return "He recibido tu imagen. Por el momento no puedo procesarla, pero un operador humano la revisará pronto. ¿En qué más puedo ayudarte?"
             
-            # Construir el contexto de la conversación
+            # Si no tenemos el nombre del usuario o está vacío, solicitarlo primero
+            if not self.user_name or self.user_name.strip() == '':
+                # Si es el primer mensaje, pedir el nombre
+                if not self.conversation_history:
+                    # Guardar el mensaje en el historial
+                    self.conversation_history.append({"role": "user", "content": message})
+                    response = "¡Bienvenido a Hatsu Sushi - Vicente Lopez! Para brindarte una mejor atención, ¿podrías decirme tu nombre?"
+                    self.conversation_history.append({"role": "assistant", "content": response})
+                    return response
+                
+                # Si ya pedimos el nombre, el siguiente mensaje es el nombre
+                formatted_name = ' '.join(word.capitalize() for word in message.split())
+                self.user_name = formatted_name  # Guardar el nombre en la instancia
+                user_data = {"nombre": formatted_name}
+                response = f"¡Gracias {formatted_name}! ¿En qué puedo ayudarte hoy?\n\n"
+                response += "🍣 Podés ver nuestro menú completo en: https://pedidos.masdelivery.com/hatsu-sushi\n"
+                response += "✍️ ¿Qué te gustaría ordenar?"
+                
+                # Guardar el mensaje en el historial
+                self.conversation_history.append({"role": "user", "content": message})
+                self.conversation_history.append({"role": "assistant", "content": response})
+                
+                return response + f"\n\n#USER_DATA:{json.dumps(user_data)}"
+            
+            # Si ya tenemos el nombre, proceder con el flujo normal
             messages = [
                 {
                     "role": "system",
