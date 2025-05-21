@@ -322,6 +322,9 @@ async def whatsapp_webhook(
                 else:
                     full_response = await agent.process_message(mensaje_a_guardar)
                 logger.info(f"Respuesta completa del agente: {full_response}")
+
+                orden_id = None
+                orden_creada = False
                 
                 # Separar el mensaje para el usuario del JSON técnico
                 user_message = full_response
@@ -339,13 +342,14 @@ async def whatsapp_webhook(
                     logger.info(f"Procesando orden de WhatsApp para {From}")
                     
                     # Procesar la orden
-                    success, is_new_user, confirmation_message = await process_order(
+                    success, is_new_user, confirmation_message, orden_id = await process_order(
                         text=f"#ORDER:{order_json}",
                         session=session,
                         phone=From.replace("whatsapp:", ""),
                         origen="whatsapp"
                     )
                     if success:
+                        orden_creada = True 
                         user_message = confirmation_message
                     else:
                         user_message += "\n\nLo siento, hubo un problema al procesar tu orden. Por favor, intenta nuevamente."
@@ -373,6 +377,8 @@ async def whatsapp_webhook(
                     mensaje=user_message,
                     rol="agente",
                     canal="whatsapp",
+                    orden_id=orden_id,
+                    orden_creada=orden_creada,
                     media_url=None,
                     tokens=output_tokens
                 )

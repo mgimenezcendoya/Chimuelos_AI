@@ -82,7 +82,8 @@ CREATE TABLE IF NOT EXISTS mensajes (
     media_url TEXT,
     flag_imagen_validada BOOLEAN DEFAULT false,
     tokens INT4 DEFAULT 0,
-    sesion_id UUID
+    sesion_id UUID,
+    orden_creada BOOLEAN DEFAULT false
 );
 
 -- Tabla: producto_local
@@ -102,3 +103,7 @@ CREATE TABLE IF NOT EXISTS producto_local (
 
 -- Eliminar tabla que ya no existe en el schema
 DROP TABLE IF EXISTS combos_detalle;
+
+-- Agregar campo orden_creada a la tabla mensajes
+ALTER TABLE hatsu.mensajes
+ADD COLUMN IF NOT EXISTS orden_creada BOOLEAN DEFAULT false;

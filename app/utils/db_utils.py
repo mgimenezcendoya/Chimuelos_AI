@@ -241,6 +241,7 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
             )
             orden_id = result.scalar_one()
             
+            
             # Guardar los items de la orden
             for item in order_data.get("items", []):
                 item_query = sql_text(f"""
@@ -275,12 +276,13 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
             # Formatear mensaje de confirmación
             confirmation_message = _format_order_confirmation(order_data)
             
-            return True, is_new_user, confirmation_message
+            return True, is_new_user, confirmation_message, orden_id
             
     except Exception as e:
         logger.error(f"Error procesando orden: {str(e)}")
         await session.rollback()
-        return False, False, str(e)
+        return False, False, str(e), None
+
 
 async def update_user_data(text: str, session: AsyncSession, phone: str, origen: str = "whatsapp"):
     """Actualiza los datos del usuario"""
@@ -399,7 +401,8 @@ async def save_message(
     canal: str = "whatsapp",
     intervencion_humana: bool = False,
     media_url: str = None,
-    tokens: int = None
+    tokens: int = None,
+    orden_creada: bool = False
 ):
     """Guarda un mensaje en la tabla hatsu.mensajes
     
@@ -458,11 +461,11 @@ async def save_message(
             INSERT INTO {SCHEMA_NAME}.mensajes (
                 usuario_id, orden_id, rol, mensaje, timestamp, 
                 canal, intervencion_humana, intervencion_humana_historial, leido,
-                media_url, tokens, sesion_id
+                media_url, tokens, sesion_id, orden_creada
             ) VALUES (
                 :usuario_id, :orden_id, :rol, :mensaje, CURRENT_TIMESTAMP,
                 :canal, :intervencion_humana, :intervencion_humana, false,
-                :media_url, :tokens, :sesion_id
+                :media_url, :tokens, :sesion_id, :orden_creada
             )
             RETURNING id
         """)
@@ -478,7 +481,8 @@ async def save_message(
                 "intervencion_humana": intervencion_humana,
                 "media_url": media_url,
                 "tokens": tokens,
-                "sesion_id": sesion_id
+                "sesion_id": sesion_id,
+                "orden_creada": orden_creada
             }
         )
         

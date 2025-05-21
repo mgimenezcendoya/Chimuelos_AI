@@ -182,6 +182,8 @@ async def chat_loop(agent: TestAIAgent):
                 if not is_human_mode:
                     # Procesar mensaje con el agente
                     full_response = await agent.process_message(user_input)
+
+                    orden_id = None  # Inicializar la variable
                     
                     # Separar el mensaje para el usuario del JSON técnico
                     user_message = full_response
@@ -197,7 +199,7 @@ async def chat_loop(agent: TestAIAgent):
                         order_data = json.loads(order_json)
                         
                         # Procesar la orden solo si viene de la consola
-                        success, is_new_user, confirmation_message = await process_order(
+                        success, is_new_user, confirmation_message, orden_id = await process_order(
                             text=f"#ORDER:{order_json}",
                             session=session,
                             phone="console",
@@ -231,7 +233,9 @@ async def chat_loop(agent: TestAIAgent):
                         mensaje=user_message,
                         rol="agente",
                         canal="console",
-                        tokens=output_tokens
+                        tokens=output_tokens,
+                        orden_id=orden_id,
+                        orden_creada=orden_id is not None 
                     )
                     await session.commit()
                     
