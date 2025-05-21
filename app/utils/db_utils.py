@@ -241,6 +241,20 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
             )
             orden_id = result.scalar_one()
             
+            # Asociar la orden al último mensaje del usuario
+            update_query = sql_text(f"""
+                UPDATE {SCHEMA_NAME}.mensajes
+                SET orden_id = :orden_id
+                WHERE id = (
+                    SELECT id FROM {SCHEMA_NAME}.mensajes
+                    WHERE usuario_id = :usuario_id
+                      AND rol = 'usuario'
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                )
+            """)
+            await session.execute(update_query, {"orden_id": orden_id, "usuario_id": usuario_id})
+            
             # Guardar los items de la orden
             for item in order_data.get("items", []):
                 item_query = sql_text(f"""
@@ -281,6 +295,7 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
         logger.error(f"Error procesando orden: {str(e)}")
         await session.rollback()
         return False, False, str(e)
+
 
 async def update_user_data(text: str, session: AsyncSession, phone: str, origen: str = "whatsapp"):
     """Actualiza los datos del usuario"""

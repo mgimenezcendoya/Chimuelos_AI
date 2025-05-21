@@ -75,6 +75,7 @@ hatsu.mensajes:
     flag_imagen_validada: boolean
     tokens: int4
     sesion_id: uuid
+    orden_creada: boolean
   defaults:
     canal: "'whatsapp'::text"
     intervencion_humana: false
@@ -82,6 +83,7 @@ hatsu.mensajes:
     intervencion_humana_historial: false
     flag_imagen_validada: false
     tokens: 0
+    orden_creada: false
 
 hatsu.producto_local:
   description: Productos disponibles en cada local.
