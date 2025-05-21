@@ -339,7 +339,7 @@ async def whatsapp_webhook(
                     logger.info(f"Procesando orden de WhatsApp para {From}")
                     
                     # Procesar la orden
-                    success, is_new_user, confirmation_message = await process_order(
+                    success, is_new_user, confirmation_message, orden_id = await process_order(
                         text=f"#ORDER:{order_json}",
                         session=session,
                         phone=From.replace("whatsapp:", ""),
@@ -373,6 +373,8 @@ async def whatsapp_webhook(
                     mensaje=user_message,
                     rol="agente",
                     canal="whatsapp",
+                    orden_id=orden_id,
+                    orden_creada=True,
                     media_url=None,
                     tokens=output_tokens
                 )
