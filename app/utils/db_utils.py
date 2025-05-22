@@ -240,8 +240,40 @@ async def process_order(text: str, session: AsyncSession, phone: str, origen: st
                 }
             )
             orden_id = result.scalar_one()
-            
-            
+ 
+            # Si el pedido no es takeaway, agregar el producto 'Delivery' como un ítem más
+            if not order_data.get("is_takeaway", True):
+                delivery_query = sql_text(f"""
+                    SELECT id, precio_base FROM {SCHEMA_NAME}.productos
+                    WHERE LOWER(nombre) = 'delivery'
+                    LIMIT 1
+                """)
+                result = await session.execute(delivery_query)
+                row = result.fetchone()
+                
+                if row:
+                    delivery_id, delivery_precio = row
+                    delivery_item = {
+                        "product": "Delivery",
+                        "quantity": 1,
+                        "precio_unitario": int(delivery_precio),
+                        "subtotal": int(delivery_precio)
+                    }
+                    order_data["items"].append(delivery_item)
+                    order_data["total"] += int(delivery_precio)
+                    # Actualizar el monto_total en la base de datos para incluir el delivery
+                    await session.execute(sql_text(f"""
+                        UPDATE {SCHEMA_NAME}.ordenes
+                        SET monto_total = :monto_total
+                        WHERE id = :orden_id
+                    """), {
+                        "monto_total": order_data["total"],
+                        "orden_id": orden_id
+                    })
+                    logger.info(f"Producto Delivery agregado a la orden: ${delivery_precio}")
+                else:
+                    logger.warning("Producto 'Delivery' no encontrado en la tabla productos.")
+                    
             # Guardar los items de la orden
             for item in order_data.get("items", []):
                 item_query = sql_text(f"""
