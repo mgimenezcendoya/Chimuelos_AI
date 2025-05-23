@@ -8,6 +8,7 @@ from typing import Dict, Any
 from pathlib import Path
 import re
 from datetime import datetime, timezone, timedelta
+from app.utils.db_utils import estimar_demora  # importa la función si aún no está
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
@@ -171,7 +172,7 @@ class TestAIAgent:
         argentina_time = utc_now - timedelta(hours=3)
         return argentina_time.strftime("%H:%M")
     
-    async def process_message(self, message: str, media_url: str = None) -> str:
+    async def process_message(self, message: str, session=None, media_url: str = None) -> str:
         """
         Procesa un mensaje del usuario y retorna una respuesta.
         
@@ -240,27 +241,27 @@ class TestAIAgent:
             
             response_text = response.choices[0].message.content
             logger.info(f"Respuesta recibida de OpenAI: {response_text}")
-            
-            # Validar orden si existe
+
+            # Primero procesar orden si existe, para que current_order_json esté disponible
             if "#ORDER:" in response_text:
                 logger.info("Detectada orden en la respuesta")
                 try:
-                    # Separar el JSON de la orden del resto del mensaje
                     parts = response_text.split("#ORDER:")
                     message_before_order = parts[0].strip()
-                    order_json = parts[1].split("\n\n")[0].strip()  # Tomar solo la parte del JSON
-                    message_after_order = "\n\n".join(parts[1].split("\n\n")[1:]).strip()  # Resto del mensaje
-                    
+                    order_json = parts[1].split("\n\n")[0].strip()
+                    message_after_order = "\n\n".join(parts[1].split("\n\n")[1:]).strip()
+
                     logger.info(f"Parte de orden a procesar: {order_json}")
                     order_data = json.loads(order_json)
                     logger.info(f"Orden parseada correctamente: {order_data}")
+
                     is_valid, error_msg = self.validate_order_items(order_data)
-                    
                     if not is_valid:
                         logger.warning(f"Orden inválida: {error_msg}")
                         response_text = f"{message_before_order}\n\nLo siento, no puedo procesar tu orden: {error_msg}"
                     else:
-                        # Si la orden es válida, mantener el mensaje original incluyendo la solicitud del comprobante
+                        # Guardar la orden para futuros usos
+                        self.current_order_json = order_data
                         response_text = f"{message_before_order}\n\n#ORDER:{order_json}"
                         if message_after_order:
                             response_text += f"\n\n{message_after_order}"
@@ -270,15 +271,27 @@ class TestAIAgent:
                 except Exception as e:
                     logger.error(f"Error procesando orden: {str(e)}")
                     response_text = "Lo siento, hubo un error procesando tu orden. Por favor, intenta nuevamente."
-            
-            # Guardar la conversación
-            self.conversation_history.append({"role": "user", "content": f"[Hora actual: {current_time}] {message}"})
-            self.conversation_history.append({"role": "assistant", "content": response_text})
-            
-            return response_text
-        except Exception as e:
-            logger.error(f"Error en process_message: {str(e)}")
-            return "Lo siento, hubo un error procesando tu mensaje. Por favor, intenta nuevamente."
+
+            # Luego revisar si el usuario pidió estimar demora
+            if "#NEEDS_DEMORA" in response_text:
+                logger.info("Se detectó una consulta sobre demora. Estimando valores dinámicamente...")
+                if self.current_order_json:
+                    is_takeaway = self.current_order_json.get("is_takeaway", True)
+                    cantidad_productos = sum(
+                        int(item.get("quantity", 1)) for item in self.current_order_json.get("items", [])
+                    )
+                    logger.info(f"Usando datos de orden actual: is_takeaway={is_takeaway}, cantidad_productos={cantidad_productos}")
+                else:
+                    is_takeaway = True
+                    cantidad_productos = 1
+                    logger.info("No hay orden actual. Usando valores por defecto para estimar demora.")
+
+                demora = await estimar_demora(
+                    session=session,
+                    is_takeaway=is_takeaway,
+                    cantidad_productos=cantidad_productos
+                )
+                return demora
     
     def _get_system_prompt(self) -> str:
         """Obtiene el prompt del sistema"""
@@ -413,6 +426,13 @@ class TestAIAgent:
             "nombre": "Juan Pérez",
             "email": "juan@email.com"
         }}
+
+        CRÍTICO - Consulta sobre demora estimada:
+        Si el usuario pregunta cuánto va a demorar su pedido o menciona la palabra "demora", "cuánto tarda", "llega en", "cuánto demora", etc., responde SOLO con el siguiente marcador especial (sin mostrarlo al cliente):
+
+        #NEEDS_DEMORA
+
+        NO respondas con una estimación propia. Solo devolvé #NEEDS_DEMORA para que el sistema lo maneje automáticamente.
 
         IMPORTANTE: Al mostrar precios en cualquier mensaje, asegúrate de:
         1. Usar el símbolo $ antes del número
@@ -589,7 +609,7 @@ async def main():
             break
         
         try:
-            response = await agent.process_message(user_input)
+            response = await agent.process_message(user_input, session=session)
             print("\nAgente:", response)
         except Exception as e:
             print(f"\nError: {str(e)}")
