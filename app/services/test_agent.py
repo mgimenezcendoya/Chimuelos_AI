@@ -275,6 +275,9 @@ class TestAIAgent:
             # Luego revisar si el usuario pidió estimar demora
             if "#NEEDS_DEMORA" in response_text:
                 logger.info("Se detectó una consulta sobre demora. Estimando valores dinámicamente...")
+                if session is None:
+                    logger.error("No se puede estimar la demora porque no se recibió una sesión de base de datos.")
+                    return "No pudimos estimar la demora en este momento. Por favor intentá de nuevo más tarde 🙏"
                 if self.current_order_json:
                     is_takeaway = self.current_order_json.get("is_takeaway", True)
                     cantidad_productos = sum(
@@ -292,6 +295,16 @@ class TestAIAgent:
                     cantidad_productos=cantidad_productos
                 )
                 return demora
+
+            # Guardar la conversación
+            self.conversation_history.append({"role": "user", "content": f"[Hora actual: {current_time}] {message}"})
+            self.conversation_history.append({"role": "assistant", "content": response_text})
+
+            return response_text
+
+        except Exception as e:
+            logger.error(f"Error en process_message: {str(e)}")
+            return "Lo siento, hubo un error procesando tu mensaje. Por favor, intenta nuevamente."
     
     def _get_system_prompt(self) -> str:
         """Obtiene el prompt del sistema"""
@@ -602,17 +615,17 @@ async def main():
     async with async_session() as session:
         # Intentar cargar datos del usuario de consola
         await agent.initialize_user_data(session, "console", "console")
-    
-    while True:
-        user_input = input("\nTú: ")
-        if user_input.lower() == 'salir':
-            break
-        
-        try:
-            response = await agent.process_message(user_input, session=session)
-            print("\nAgente:", response)
-        except Exception as e:
-            print(f"\nError: {str(e)}")
+          
+        while True:
+            user_input = input("\nTú: ")
+            if user_input.lower() == 'salir':
+                break
+            
+            try:
+                response = await agent.process_message(user_input, session=session)  # ✅ ahora sí está dentro
+                print("\nAgente:", response)
+            except Exception as e:
+                print(f"\nError: {str(e)}")
 
 if __name__ == "__main__":
     asyncio.run(main()) 
