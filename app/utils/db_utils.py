@@ -149,6 +149,54 @@ async def estimar_demora(session: AsyncSession, is_takeaway: bool, cantidad_prod
         logger.error(f"Error al estimar la demora: {str(e)}")
         return "No pudimos estimar la demora en este momento. Por favor intentá de nuevo más tarde 🙏"
 
+async def estimar_demora_parcial(session: AsyncSession, estado: dict) -> str:
+    """
+    Estima la demora basándose en el estado parcial del pedido:
+    - carga actual del local (últimos 30 min)
+    - si es delivery o takeaway
+    - cantidad de productos
+    """
+    try:
+        demora = 20  # base
+        nombre_local = estado.get("nombre_local", "Vicente Lopez")
+        is_takeaway = estado.get("is_takeaway")
+        productos = estado.get("productos", [])
+
+        # Obtener pedidos recientes NO entregados
+        query = sql_text(f"""
+            SELECT COUNT(*) 
+            FROM {SCHEMA_NAME}.ordenes 
+            WHERE fecha_hora > NOW() - INTERVAL '30 minutes'
+            AND fecha_entregada IS NULL
+            AND local_id = (
+                SELECT id FROM {SCHEMA_NAME}.locales WHERE nombre = :nombre_local LIMIT 1
+            )
+        """)
+        result = await session.execute(query, {"nombre_local": nombre_local})
+        pedidos_recientes = result.scalar_one()
+
+        if pedidos_recientes >= 15:
+            demora += 20
+        elif pedidos_recientes >= 8:
+            demora += 10
+
+        if is_takeaway is False:
+            demora += 10  # Delivery tarda más
+
+        cantidad_items = sum([p.get("cantidad", 1) for p in productos])
+        if cantidad_items >= 5:
+            demora += 10
+        elif cantidad_items >= 2:
+            demora += 5
+
+        if pedidos_recientes == 0 and cantidad_items == 0:
+            return "Ahora mismo no hay otros pedidos pendientes, así que podríamos empezar con el tuyo enseguida. Calculá unos 15 minutos para tenerlo listo 🍣"
+
+        return f"Según lo que me contaste hasta ahora, la demora estimada es de {demora}-{demora + 10} minutos ⏱️"
+    except Exception as e:
+        logger.error(f"Error al estimar la demora parcial: {str(e)}")
+        return "No pudimos estimar la demora en este momento. Por favor intentá de nuevo más tarde 🙏"
+
 
 def _format_order_confirmation(order_data: dict) -> str:
     """Formatea el mensaje de confirmación de orden con emojis y detalles"""

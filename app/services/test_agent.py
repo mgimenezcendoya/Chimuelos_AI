@@ -8,8 +8,7 @@ from typing import Dict, Any
 from pathlib import Path
 import re
 from datetime import datetime, timezone, timedelta
-from app.utils.db_utils import estimar_demora  # importa la función si aún no está
-
+from app.utils.db_utils import estimar_demora, estimar_demora_parcial  # asegurate de importar ambas
 # Configurar logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -272,28 +271,32 @@ class TestAIAgent:
                     logger.error(f"Error procesando orden: {str(e)}")
                     response_text = "Lo siento, hubo un error procesando tu orden. Por favor, intenta nuevamente."
 
-            # Luego revisar si el usuario pidió estimar demora
+            # Si el modelo detectó una consulta de demora, estimar dinámicamente
             if "#NEEDS_DEMORA" in response_text:
                 logger.info("Se detectó una consulta sobre demora. Estimando valores dinámicamente...")
                 if session is None:
                     logger.error("No se puede estimar la demora porque no se recibió una sesión de base de datos.")
                     return "No pudimos estimar la demora en este momento. Por favor intentá de nuevo más tarde 🙏"
+
                 if self.current_order_json:
                     is_takeaway = self.current_order_json.get("is_takeaway", True)
                     cantidad_productos = sum(
                         int(item.get("quantity", 1)) for item in self.current_order_json.get("items", [])
                     )
-                    logger.info(f"Usando datos de orden actual: is_takeaway={is_takeaway}, cantidad_productos={cantidad_productos}")
+                    demora = await estimar_demora(
+                        session=session,
+                        is_takeaway=is_takeaway,
+                        cantidad_productos=cantidad_productos
+                    )
                 else:
-                    is_takeaway = True
-                    cantidad_productos = 1
-                    logger.info("No hay orden actual. Usando valores por defecto para estimar demora.")
+                    # Usar estimación parcial basada en el estado actual del agente
+                    estado = {
+                        "nombre_local": "Vicente Lopez",  # por ahora hardcodeado
+                        "is_takeaway": True,  # asumimos retiro si no sabemos
+                        "productos": []  # sin datos todavía
+                    }
+                    demora = await estimar_demora_parcial(session=session, estado=estado)
 
-                demora = await estimar_demora(
-                    session=session,
-                    is_takeaway=is_takeaway,
-                    cantidad_productos=cantidad_productos
-                )
                 return demora
 
             # Guardar la conversación
