@@ -181,7 +181,7 @@ async def chat_loop(agent: TestAIAgent):
                 # Solo procesar con el agente si NO está en modo humano
                 if not is_human_mode:
                     # Procesar mensaje con el agente
-                    full_response = await agent.process_message(user_input)
+                    full_response = await agent.process_message(user_input, session=session)
 
                     orden_id = None  # Inicializar la variable
                     

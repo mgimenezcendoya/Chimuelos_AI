@@ -318,9 +318,9 @@ async def whatsapp_webhook(
             try:
                 # Si hay una imagen, procesar con el agente incluyendo la URL
                 if MediaUrl0:
-                    full_response = await agent.process_message(mensaje_a_guardar, media_url=MediaUrl0)
+                    full_response = await agent.process_message(mensaje_a_guardar,session=session, media_url=MediaUrl0)
                 else:
-                    full_response = await agent.process_message(mensaje_a_guardar)
+                    full_response = await agent.process_message(mensaje_a_guardar,session=session)
                 logger.info(f"Respuesta completa del agente: {full_response}")
 
                 orden_id = None
