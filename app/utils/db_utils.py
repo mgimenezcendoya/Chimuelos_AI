@@ -103,6 +103,53 @@ async def get_locales_from_db(session: AsyncSession):
         logger.error(f"Error obteniendo locales de la base de datos: {str(e)}")
         return None
 
+
+async def estimar_demora(session: AsyncSession, is_takeaway: bool, cantidad_productos: int, nombre_local: str = "Vicente Lopez") -> str:
+    """
+    Estima la demora de entrega en base a:
+    - pedidos NO entregados en los últimos 30 minutos
+    - si es delivery o takeaway
+    - horario actual
+    - cantidad de productos del pedido
+    """
+    try:
+        # Obtener cantidad de pedidos recientes NO entregados
+        query = sql_text(f"""
+            SELECT COUNT(*) 
+            FROM {SCHEMA_NAME}.ordenes 
+            WHERE fecha_hora > NOW() - INTERVAL '30 minutes'
+            AND fecha_entregada IS NULL
+            AND local_id = (
+                SELECT id FROM {SCHEMA_NAME}.locales WHERE nombre = :nombre_local LIMIT 1
+            )
+        """)
+        result = await session.execute(query, {"nombre_local": nombre_local})
+        pedidos_recientes = result.scalar_one()
+
+        # Estimar demora base
+        hora_actual = datetime.now().hour
+        demora = 20 if is_takeaway else 40
+
+        if pedidos_recientes >= 15:
+            demora += 20
+        elif pedidos_recientes >= 8:
+            demora += 10
+
+        if 20 <= hora_actual <= 22:
+            demora += 10
+
+        if cantidad_productos >= 5:
+            demora += 5
+
+        if pedidos_recientes == 0:
+            return "Ahora mismo no hay demora. Podemos preparar tu pedido enseguida 🍣"
+
+        return f"La demora estimada es de {demora}-{demora + 10} minutos ⏱️"
+    except Exception as e:
+        logger.error(f"Error al estimar la demora: {str(e)}")
+        return "No pudimos estimar la demora en este momento. Por favor intentá de nuevo más tarde 🙏"
+
+
 def _format_order_confirmation(order_data: dict) -> str:
     """Formatea el mensaje de confirmación de orden con emojis y detalles"""
     items = []
